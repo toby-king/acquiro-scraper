@@ -56,7 +56,6 @@ export class DaltonsScraper extends BaseScraper {
       const href = $(el).attr('href')?.trim();
       if (!href) return;
       const abs = href.startsWith('http') ? href : `${BASE_URL}${href}`;
-      // Only include individual listing pages (not category/search pages)
       if (abs.includes('/listing/')) urls.add(abs);
     });
 
