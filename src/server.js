@@ -2,8 +2,15 @@
  * Acquiro Scraper — HTTP API server.
  *
  * POST /scrape
- *   Body (JSON): { "source": "rightbiz", "pages": 3 }
- *   Response:    { "source": "Rightbiz", "pages": 3, "count": 25, "listings": [...] }
+ *   Body (JSON): { "sources": "rightbiz", "pages": 3 }
+ *            or: { "sources": ["rightbiz", "cogogo"], "pages": 3 }
+ *
+ *   Response: {
+ *     "pages": 3,
+ *     "count": 75,
+ *     "by_source": { "Rightbiz": 40, "CoGoGo": 35 },
+ *     "listings": [...]
+ *   }
  *
  * Valid source values: rightbiz, cogogo, daltons, businessesforsale (alias: bfs)
  *
@@ -47,6 +54,10 @@ async function readBody(req) {
   return JSON.parse(Buffer.concat(chunks).toString());
 }
 
+function normaliseKey(raw) {
+  return String(raw).toLowerCase().replace(/[\s_-]/g, '');
+}
+
 // ── Request handler ───────────────────────────────────────────────────────────
 
 const server = createServer(async (req, res) => {
@@ -62,12 +73,15 @@ const server = createServer(async (req, res) => {
     return send(res, 400, { error: 'Request body must be valid JSON' });
   }
 
-  // Validate source
-  const sourceKey = String(body.source ?? '').toLowerCase().replace(/[\s_-]/g, '');
-  const factory = SCRAPERS[sourceKey];
-  if (!factory) {
+  // Normalise sources — accept a string or an array
+  const rawSources = Array.isArray(body.sources)
+    ? body.sources
+    : [body.sources];
+
+  const invalid = rawSources.filter((s) => !SCRAPERS[normaliseKey(s)]);
+  if (rawSources.length === 0 || invalid.length > 0) {
     return send(res, 400, {
-      error: `Unknown source "${body.source}". Valid values: ${VALID_SOURCES}`,
+      error: `Unknown source(s): ${invalid.join(', ')}. Valid values: ${VALID_SOURCES}`,
     });
   }
 
@@ -77,16 +91,27 @@ const server = createServer(async (req, res) => {
     return send(res, 400, { error: '"pages" must be a positive integer' });
   }
 
-  // Run
-  console.log(`[API] POST /scrape  source=${sourceKey}  pages=${pages}`);
+  const sourceKeys = rawSources.map(normaliseKey);
+  console.log(`[API] POST /scrape  sources=[${sourceKeys.join(', ')}]  pages=${pages}`);
+
+  // Run all requested scrapers in parallel
   try {
-    const scraper = factory();
-    const listings = await scraper.scrape(pages);
-    console.log(`[API] Done — ${listings.length} listings returned`);
+    const results = await Promise.all(
+      sourceKeys.map(async (key) => {
+        const scraper = SCRAPERS[key]();
+        const listings = await scraper.scrape(pages);
+        console.log(`[API] ${scraper.name} — ${listings.length} listings`);
+        return { name: scraper.name, listings };
+      }),
+    );
+
+    const listings = results.flatMap((r) => r.listings);
+    const by_source = Object.fromEntries(results.map((r) => [r.name, r.listings.length]));
+
     return send(res, 200, {
-      source: scraper.name,
       pages,
       count: listings.length,
+      by_source,
       listings,
     });
   } catch (err) {
@@ -97,5 +122,5 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`Acquiro Scraper API listening on http://localhost:${PORT}`);
-  console.log(`POST /scrape  { "source": "rightbiz|cogogo|daltons|businessesforsale", "pages": 3 }`);
+  console.log(`POST /scrape  { "sources": "rightbiz|cogogo|daltons|businessesforsale|all", "pages": 3 }`);
 });
