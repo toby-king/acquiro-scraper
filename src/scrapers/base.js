@@ -16,6 +16,7 @@
 
 import { launchBrowser, createContext, humanScroll } from '../utils/browser.js';
 import { rateLimit, sleep, randomInt } from '../utils/rateLimiter.js';
+import { insertListing } from '../utils/bubbleClient.js';
 
 // Base delays (ms) for exponential back-off: attempt 0→2 s, 1→4 s, 2→8 s
 const BACKOFF_BASE_MS = [2000, 4000, 8000];
@@ -352,6 +353,13 @@ export class BaseScraper {
                 details.source = this.name;
                 this._normaliseFinancials(details);
                 this._printListing(details, idx + 1);
+                try {
+                  const response = await insertListing(details);
+                  this._log(`[${idx + 1}] Inserted — Bubble response: ${JSON.stringify(response)}`);
+                  if (response?.response?.listing_id) details.db_id = response.response.listing_id;
+                } catch (err) {
+                  this._error(`[${idx + 1}] DB insert failed: ${err.message}`);
+                }
               }
               return details;
             } catch (err) {
