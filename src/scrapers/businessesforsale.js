@@ -149,13 +149,33 @@ export class BusinessesForSaleScraper extends BaseScraper {
       const turnover  = $('dl#revenue dd strong').first().text().replace(/\s+/g, ' ').trim() || null;
       const netProfit = $('dl#profit dd strong').first().text().replace(/\s+/g, ' ').trim() || null;
 
-      // ── Tenure ────────────────────────────────────────────────────────────
-      let tenure = null;
+      // ── dl.listing-details map (tenure, sector, rent, region) ────────────
+      // Each dl.listing-details contains one dt/dd key-value pair.
+      const detailsMap = {};
       $('dl.listing-details').each((_, el) => {
-        const dt = $(el).find('dt').text().trim().toLowerCase();
-        const dd = $(el).find('dd').text().replace(/\s+/g, ' ').trim();
-        if (dt.includes('tenure') && dd) tenure = dd;
+        const key   = $(el).find('dt').text().trim().toLowerCase();
+        const value = $(el).find('dd').text().replace(/\s+/g, ' ').trim();
+        if (key && value) detailsMap[key] = value;
       });
+
+      const tenure =
+        Object.entries(detailsMap).find(([k]) => k.includes('tenure'))?.[1] ?? null;
+      const sectorFromDetails =
+        Object.entries(detailsMap).find(([k]) =>
+          k.includes('sector') || k.includes('category') || k.includes('business type')
+        )?.[1] ?? null;
+      const rentFromDetails =
+        detailsMap['rent'] ?? null;
+      const regionFromDetails =
+        Object.entries(detailsMap).find(([k]) =>
+          k.includes('region') || k.includes('county')
+        )?.[1] ?? null;
+
+      // ── Region ────────────────────────────────────────────────────────────
+      // Prefer the structured details map; fall back to last locationParts item.
+      const region =
+        regionFromDetails ||
+        (locationParts.length >= 2 ? locationParts[locationParts.length - 1] : null);
 
       // ── Description ───────────────────────────────────────────────────────
       const descParts = [];
@@ -163,20 +183,30 @@ export class BusinessesForSaleScraper extends BaseScraper {
         const text = $(el).text().replace(/\s+/g, ' ').trim();
         if (text) descParts.push(text);
       });
-      const description = descParts.join('\n\n') || null;
+      const description = descParts.join(' ') || null;
 
-      return {
-        title,
-        url,
-        location,
-        tenure,
-        price,
-        turnover,
-        netProfit,
-        rent: null,
-        sector: null,
-        description,
-      };
+      // ── Image ─────────────────────────────────────────────────────────────
+      const image =
+        $('.listing-images img, .listing-header-image img, .listing-photo img')
+          .first().attr('src') || null;
+
+      const result = { business_name: title, url };
+      if (location)    result.location     = location;
+      if (region)      result.region       = region;
+      if (image)       result.image        = image;
+      if (price)       result.asking_price = price;
+      if (tenure) {
+        if (/leasehold/i.test(tenure) && price) result.leasehold = price;
+        else if (/freehold/i.test(tenure) && price) result.freehold = price;
+      }
+      if (turnover)          result.turnover     = turnover;
+      if (netProfit)         result.net_profit   = netProfit;
+      if (rentFromDetails)   result.rent         = rentFromDetails;
+      if (sectorFromDetails) result.sector       = sectorFromDetails;
+      if (description)       result.description  = description;
+
+      this._applyTextFinancials(result);
+      return result;
     } catch (err) {
       this._error(`extractDetails failed for ${url}: ${err.message}`);
       return null;

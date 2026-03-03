@@ -163,6 +163,74 @@ export class BaseScraper {
     console.error(`[${this.name}] ERROR: ${msg}`);
   }
 
+  // ── Financial text parser ────────────────────────────────────────────────────
+
+  /**
+   * Extract financial figures from a flat description string.
+   * Returns a partial object; only fields that matched are included.
+   * Intended as a fallback — call after structured extraction and only fill
+   * fields that structured HTML didn't populate.
+   * @param {string} text
+   * @returns {object}
+   */
+  _parseFinancialsFromText(text) {
+    const find = (pattern) => {
+      const m = text.match(pattern);
+      return m ? m[1].trim() : null;
+    };
+
+    const out = {};
+
+    // Separator pattern: [^£\n]{0,20} allows "of", "was", ":", " — ", etc.
+    // between the keyword and the £ figure without jumping across sentences.
+    const SEP = '[^£\\n]{0,20}';
+    const VAL = '(£[\\d,.]+(?:\\s*[km](?:illion)?)?)';
+    const re  = (keyword) => new RegExp(`${keyword}${SEP}${VAL}`, 'i');
+
+    const turnover = find(re('(?:annual\\s+)?turnover'));
+    if (turnover) out.turnover = turnover;
+
+    const netProfit =
+      find(re('net\\s+profit')) ||
+      find(re('gross\\s+profit'));
+    if (netProfit) out.net_profit = netProfit;
+
+    const ebitda = find(re('ebitda'));
+    if (ebitda) out.ebitda = ebitda;
+
+    // \bebit\b so we don't double-match inside "ebitda"
+    const ebit = find(new RegExp(`\\bebit\\b${SEP}${VAL}`, 'i'));
+    if (ebit) out.ebit = ebit;
+
+    const rent = find(re('rent'));
+    if (rent) out.rent = rent;
+
+    const askingPrice = find(re('(?:asking\\s+)?price'));
+    if (askingPrice) out.asking_price = askingPrice;
+
+    return out;
+  }
+
+  /**
+   * Apply text-parsed financials to `result`, filling only fields that are
+   * not already populated by structured extraction. Logs any fields filled.
+   * @param {object} result  The partially-built listing object (mutated in place).
+   */
+  _applyTextFinancials(result) {
+    if (!result.description) return;
+    const found = this._parseFinancialsFromText(result.description);
+    const applied = [];
+    for (const [field, value] of Object.entries(found)) {
+      if (!result[field]) {
+        result[field] = value;
+        applied.push(`${field}=${value}`);
+      }
+    }
+    if (applied.length > 0) {
+      this._log(`Text parser filled: ${applied.join(', ')}`);
+    }
+  }
+
   // ── Abstract interface (must be overridden by subclasses) ───────────────────
 
   /**
@@ -236,7 +304,10 @@ export class BaseScraper {
             try {
               const html = await this._fetchDetailPage(url);
               const details = this.extractDetails(html, url);
-              if (details) this._printListing(details, idx + 1);
+              if (details) {
+                details.source = this.name;
+                this._printListing(details, idx + 1);
+              }
               return details;
             } catch (err) {
               this._error(`Failed to scrape ${url}: ${err.message}`);
@@ -267,32 +338,38 @@ export class BaseScraper {
 
     lines.push('');
     lines.push(DIVIDER);
-    lines.push(`LISTING #${idx}  —  ${listing.title ?? '(no title)'}`);
+    lines.push(`LISTING #${idx}  —  ${listing.business_name ?? '(no title)'}`);
     lines.push(DIVIDER);
 
     const FIELDS = [
-      ['URL', 'url'],
-      ['Location', 'location'],
-      ['Price', 'price'],
-      ['Tenure', 'tenure'],
-      ['Turnover', 'turnover'],
-      ['Net Profit', 'netProfit'],
-      ['Sector', 'sector'],
+      ['Source',       'source'],
+      ['URL',          'url'],
+      ['Location',     'location'],
+      ['Region',       'region'],
+      ['Asking Price', 'asking_price'],
+      ['Leasehold',    'leasehold'],
+      ['Freehold',     'freehold'],
+      ['Turnover',     'turnover'],
+      ['Net Profit',   'net_profit'],
+      ['EBIT',         'ebit'],
+      ['EBITDA',       'ebitda'],
+      ['Rent',         'rent'],
+      ['Sector',       'sector'],
+      ['Sub-sector',   'sub_sector'],
+      ['Investment',   'investment'],
+      ['Franchise Fee','franchise_fee'],
+      ['Image',        'image'],
     ];
 
     for (const [label, key] of FIELDS) {
       const val = listing[key];
       if (val) {
-        lines.push(`${label.padEnd(14)}: ${val}`);
+        lines.push(`${label.padEnd(15)}: ${val}`);
       }
     }
 
     if (listing.description) {
-      const snippet =
-        listing.description.length > 300
-          ? listing.description.slice(0, 300).trimEnd() + '…'
-          : listing.description;
-      lines.push(`${'Description'.padEnd(14)}: ${snippet}`);
+      lines.push(`${'Description'.padEnd(15)}: ${listing.description}`);
     }
 
     lines.push(DIVIDER);

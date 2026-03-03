@@ -141,26 +141,39 @@ export class CoGoGoScraper extends BaseScraper {
         }
       });
 
-      // ── Description (overview tab) ─────────────────────────────────────────
-      // Replace <br> tags with newlines before extracting text.
-      const overviewEl = $('div.tab-pane#overview div.row');
-      overviewEl.find('br').replaceWith('\n');
+      // ── Description (all server-rendered tabs) ────────────────────────────
+      // Three tabs are server-side rendered: #overview, #location, #premises.
+      // Capture all of them in one pass.
       const description =
-        overviewEl.text().replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim() ||
-        null;
+        $('div.tab-pane div.row').text().replace(/\s+/g, ' ').trim() || null;
 
-      return {
-        title,
-        url,
-        location,
-        tenure,
-        price,
-        turnover,
-        netProfit: null,
-        rent: null,
-        sector: null,  // CoGoGo does not expose a structured sector field
-        description,
-      };
+      // ── Image ─────────────────────────────────────────────────────────────
+      const image = $('.splide__slide__image').first().attr('src') || null;
+
+      // ── Sector (derived from URL slug) ────────────────────────────────────
+      // URL pattern: .../roofing-contractors-7433/
+      // Strip numeric suffix → replace hyphens → title-case
+      const urlPath = new URL(url).pathname;
+      const slug = urlPath.replace(/\/$/, '').split('/').pop() || '';
+      const sectorSlug = slug.replace(/-\d+$/, '').replace(/-/g, ' ');
+      const sector = sectorSlug
+        ? sectorSlug.replace(/\b\w/g, (c) => c.toUpperCase())
+        : null;
+
+      const result = { business_name: title, url };
+      if (location)    result.location     = location;
+      if (image)       result.image        = image;
+      if (price)       result.asking_price = price;
+      if (tenure) {
+        if (/leasehold/i.test(tenure) && price) result.leasehold = price;
+        else if (/freehold/i.test(tenure) && price) result.freehold = price;
+      }
+      if (turnover)    result.turnover     = turnover;
+      if (sector)      result.sector       = sector;
+      if (description) result.description  = description;
+
+      this._applyTextFinancials(result);
+      return result;
     } catch (err) {
       this._error(`extractDetails failed for ${url}: ${err.message}`);
       return null;

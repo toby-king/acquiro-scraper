@@ -105,14 +105,20 @@ export class DaltonsScraper extends BaseScraper {
         return null;
       }
 
-      // ── Location ───────────────────────────────────────────────────────────
-      // address.item-address can repeat the same region — deduplicate.
-      const locationParts = new Set();
+      // ── Location + Region ─────────────────────────────────────────────────
+      // address.item-address can repeat the same item — deduplicate while
+      // preserving order (e.g. ["West Sussex", "England"]).
+      const seenLocItems = new Set();
+      const locationItems = [];
       $('address.item-address a').each((_, el) => {
         const text = $(el).text().trim();
-        if (text) locationParts.add(text);
+        if (text && !seenLocItems.has(text)) {
+          seenLocItems.add(text);
+          locationItems.push(text);
+        }
       });
-      const location = [...locationParts].join(', ') || null;
+      const location = locationItems[0] || null;
+      const region   = locationItems.length > 1 ? locationItems[locationItems.length - 1] : null;
 
       // ── Price and Tenure ───────────────────────────────────────────────────
       // List items may look like:
@@ -142,6 +148,14 @@ export class DaltonsScraper extends BaseScraper {
         }
       });
 
+      // ── Turnover ──────────────────────────────────────────────────────────
+      // li.item-annual-price text: "Annual Turnover: £45,392" → strip to "£45,392"
+      const turnoverRaw = $('ul.item-price-wrap li.item-annual-price')
+        .text().replace(/\s+/g, ' ').trim();
+      const turnover = turnoverRaw
+        ? turnoverRaw.replace(/^[^:]+:\s*/, '') || null
+        : null;
+
       // ── Sector ────────────────────────────────────────────────────────────
       const sectorSet = new Set();
       $('div.property-overview-wrap li.property-overview-item a').each((_, el) => {
@@ -151,25 +165,27 @@ export class DaltonsScraper extends BaseScraper {
       const sector = sectorSet.size > 0 ? [...sectorSet].join(', ') : null;
 
       // ── Description ───────────────────────────────────────────────────────
-      const descParts = [];
-      $('div#viewMoreContent p').each((_, el) => {
-        const text = $(el).text().replace(/\s+/g, ' ').trim();
-        if (text) descParts.push(text);
-      });
-      const description = descParts.join('\n\n') || null;
+      // Use the full description wrapper (covers both #viewMoreContent blocks).
+      const description =
+        $('#property-description-wrap').text().replace(/\s+/g, ' ').trim() || null;
 
-      return {
-        title,
-        url,
-        location,
-        tenure,
-        price,
-        turnover: null,  // embedded in description text on Daltons
-        netProfit: null,
-        rent: null,
-        sector,
-        description,
-      };
+      // ── Image ─────────────────────────────────────────────────────────────
+      const image =
+        $('div.property-top-wrap img.img-fluid').first().attr('src') || null;
+
+      const result = { business_name: title, url };
+      if (location)                        result.location     = location;
+      if (region)                          result.region       = region;
+      if (image)                           result.image        = image;
+      if (price)                           result.asking_price = price;
+      if (tenure === 'Leasehold' && price) result.leasehold    = price;
+      if (tenure === 'Freehold'  && price) result.freehold     = price;
+      if (turnover)                        result.turnover     = turnover;
+      if (sector)                          result.sector       = sector;
+      if (description)                     result.description  = description;
+
+      this._applyTextFinancials(result);
+      return result;
     } catch (err) {
       this._error(`extractDetails failed for ${url}: ${err.message}`);
       return null;

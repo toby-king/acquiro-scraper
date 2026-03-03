@@ -158,11 +158,18 @@ export class RightbizScraper extends BaseScraper {
         return null;
       }
 
-      // ── Location ─────────────────────────────────────────────────────────
+      // ── Location + Region ─────────────────────────────────────────────────
       // The page has multiple .location-item elements; the first one in the
       // main content area is the listing's location.
-      const location = $('span.location-item').first().text().trim()
-        .replace(/\s+/g, ' ');
+      // Format is typically "Town, County" — split to get location + region.
+      const rawLocation = $('span.location-item').first().text().trim().replace(/\s+/g, ' ');
+      let location = rawLocation || null;
+      let region = null;
+      if (rawLocation.includes(', ')) {
+        const parts = rawLocation.split(', ');
+        location = parts[0];
+        region = parts[1];
+      }
 
       // ── Key financial data ────────────────────────────────────────────────
       // ul.content__body__data > li holds rows like:
@@ -210,25 +217,31 @@ export class RightbizScraper extends BaseScraper {
       const sector = sectorSet.size > 0 ? [...sectorSet].join(', ') : null;
 
       // ── Description ───────────────────────────────────────────────────────
-      const descParagraphs = [];
-      $('div.content__body__description p').each((_, el) => {
-        const text = $(el).text().replace(/\s+/g, ' ').trim();
-        if (text) descParagraphs.push(text);
-      });
-      const description = descParagraphs.join('\n\n') || null;
+      // Grab the whole container (h2 heading + all paragraphs) in one pass.
+      const description =
+        $('div.content__body__description').text().replace(/\s+/g, ' ').trim() || null;
 
-      return {
-        title,
-        url,
-        location: location || null,
-        tenure,
-        price,
-        turnover,
-        netProfit,
-        rent: rent || null,
-        sector,
-        description,
-      };
+      // ── Image ─────────────────────────────────────────────────────────────
+      const image =
+        $('.content__body__img-list img').first().attr('src') ||
+        $('.content-body-img-slider-wrapper img').first().attr('src') ||
+        null;
+
+      const result = { business_name: title, url };
+      if (location)                        result.location    = location;
+      if (region)                          result.region      = region;
+      if (image)                           result.image       = image;
+      if (price)                           result.asking_price = price;
+      if (tenure === 'Leasehold' && price) result.leasehold   = price;
+      if (tenure === 'Freehold'  && price) result.freehold    = price;
+      if (turnover)                        result.turnover    = turnover;
+      if (netProfit)                       result.net_profit  = netProfit;
+      if (rent)                            result.rent        = rent;
+      if (sector)                          result.sector      = sector;
+      if (description)                     result.description = description;
+
+      this._applyTextFinancials(result);
+      return result;
     } catch (err) {
       this._error(`extractDetails failed for ${url}: ${err.message}`);
       return null;
