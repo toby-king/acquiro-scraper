@@ -231,6 +231,50 @@ export class BaseScraper {
     }
   }
 
+  // ── Currency normalisation ───────────────────────────────────────────────────
+
+  /**
+   * Parse a currency string into a plain number.
+   * Handles: £1,234  £1,234.56  £1.2m  £549k  £1.2million
+   * Returns null for non-parseable values ("POA", "On request", etc.).
+   * @param {string} str
+   * @returns {number | null}
+   */
+  _parseCurrency(str) {
+    if (!str || typeof str !== 'string') return null;
+    const m = str.match(/£\s*([\d,]+(?:\.\d+)?)\s*([km](?:illion)?)?/i);
+    if (!m) return null;
+    let num = parseFloat(m[1].replace(/,/g, ''));
+    if (isNaN(num)) return null;
+    const suffix = (m[2] ?? '').toLowerCase();
+    if (suffix.startsWith('m')) num *= 1_000_000;
+    else if (suffix.startsWith('k')) num *= 1_000;
+    return num;
+  }
+
+  /**
+   * Convert all financial string fields on a listing object to plain numbers.
+   * Fields that cannot be parsed (e.g. "Price on Application") are removed.
+   * Called automatically in scrape() after extractDetails() returns.
+   * @param {object} result
+   */
+  _normaliseFinancials(result) {
+    const FIELDS = [
+      'asking_price', 'leasehold', 'freehold',
+      'turnover', 'net_profit', 'ebit', 'ebitda',
+      'rent', 'investment', 'franchise_fee',
+    ];
+    for (const field of FIELDS) {
+      if (!(field in result)) continue;
+      const num = this._parseCurrency(result[field]);
+      if (num !== null) {
+        result[field] = num;
+      } else {
+        delete result[field];
+      }
+    }
+  }
+
   // ── Abstract interface (must be overridden by subclasses) ───────────────────
 
   /**
@@ -306,6 +350,7 @@ export class BaseScraper {
               const details = this.extractDetails(html, url);
               if (details) {
                 details.source = this.name;
+                this._normaliseFinancials(details);
                 this._printListing(details, idx + 1);
               }
               return details;
