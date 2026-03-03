@@ -1,3 +1,6 @@
+# Playwright browsers (large binaries — install locally with npx playwright install)
+.playwright-browsers/
+
 # Logs
 logs
 *.log
