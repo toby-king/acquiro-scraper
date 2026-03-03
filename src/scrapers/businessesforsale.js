@@ -71,6 +71,30 @@ export class BusinessesForSaleScraper extends BaseScraper {
     });
   }
 
+  // ── Detail page fetch (plain HTTP — BFS blocks headless browsers) ───────────
+
+  /**
+   * BFS is fully server-rendered and blocks headless Playwright on detail pages.
+   * Override to use plain fetch() with browser-like headers instead.
+   */
+  async _fetchDetailPage(url) {
+    await rateLimit(url);
+
+    return this._withRetry(async () => {
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': this._getRandomDesktopUA(),
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-GB,en;q=0.9',
+          Referer: SEARCH_PAGE_1,
+        },
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.text();
+    });
+  }
+
   // ── HTML parsing helpers ────────────────────────────────────────────────────
 
   _extractUrlsFromHtml(html) {

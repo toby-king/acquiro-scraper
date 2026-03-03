@@ -117,6 +117,17 @@ export class BaseScraper {
     });
   }
 
+  /**
+   * Fetch a single listing detail page.
+   * Defaults to the stealth Playwright path; subclasses may override this
+   * (e.g. for sites that are fully server-rendered and block headless browsers).
+   * @param {string} url
+   * @returns {Promise<string>}
+   */
+  async _fetchDetailPage(url) {
+    return this._fetchPage(url);
+  }
+
   // ── Retry helper ────────────────────────────────────────────────────────────
 
   /**
@@ -223,7 +234,7 @@ export class BaseScraper {
           this._semaphore.run(async () => {
             this._log(`[${idx + 1}/${listingUrls.length}] Fetching: ${url}`);
             try {
-              const html = await this._fetchPage(url);
+              const html = await this._fetchDetailPage(url);
               const details = this.extractDetails(html, url);
               if (details) this._printListing(details, idx + 1);
               return details;
