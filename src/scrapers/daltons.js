@@ -20,6 +20,8 @@
 
 import * as cheerio from 'cheerio';
 import { BaseScraper } from './base.js';
+import { createContext, humanScroll } from '../utils/browser.js';
+import { rateLimit } from '../utils/rateLimiter.js';
 
 const BASE_URL = 'https://www.daltonsbusiness.com';
 const SEARCH_BASE =
@@ -42,8 +44,31 @@ export class DaltonsScraper extends BaseScraper {
         ? SEARCH_BASE
         : `${SEARCH_BASE}&page=${pageNum}`;
 
-    const html = await this._fetchPage(url);
+    const html = await this._fetchSearchPage(url);
     return this._extractUrlsFromHtml(html);
+  }
+
+  /**
+   * Fetch a Daltons search results page via Playwright, waiting until at least
+   * one listing card is present in the DOM before capturing the HTML.
+   * Daltons renders cards slightly after DOMContentLoaded, so a plain
+   * waitUntil:'domcontentloaded' grab can return the skeleton with no listings.
+   */
+  async _fetchSearchPage(url) {
+    await rateLimit(url);
+
+    return this._withRetry(async () => {
+      const context = await createContext(this._browser);
+      const page = await context.newPage();
+      try {
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await page.waitForSelector('div.item-listing-wrap', { timeout: 20000 });
+        await humanScroll(page);
+        return await page.content();
+      } finally {
+        await context.close();
+      }
+    });
   }
 
   // ── HTML parsing helpers ────────────────────────────────────────────────────
