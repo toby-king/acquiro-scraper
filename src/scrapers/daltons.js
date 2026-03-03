@@ -126,13 +126,21 @@ export class DaltonsScraper extends BaseScraper {
         }
       });
 
-      // ── Turnover ──────────────────────────────────────────────────────────
-      // li.item-annual-price text: "Annual Turnover: £45,392" → strip to "£45,392"
-      const turnoverRaw = $('ul.item-price-wrap li.item-annual-price')
-        .text().replace(/\s+/g, ' ').trim();
-      const turnover = turnoverRaw
-        ? turnoverRaw.replace(/^[^:]+:\s*/, '') || null
-        : null;
+      // ── Annual financials ─────────────────────────────────────────────────
+      // Each li.item-annual-price is one row: "Annual Turnover: £45,392"
+      // There may be multiple rows (turnover, net profit, possibly multiple years).
+      // Iterate and pick the first match per field by keyword.
+      let turnover  = null;
+      let netProfit = null;
+      $('ul.item-price-wrap li.item-annual-price').each((_, el) => {
+        const raw = $(el).text().replace(/\s+/g, ' ').trim();
+        const colonIdx = raw.indexOf(':');
+        if (colonIdx === -1) return;
+        const key   = raw.slice(0, colonIdx).trim().toLowerCase();
+        const value = raw.slice(colonIdx + 1).trim() || null;
+        if (!turnover  && /turnover/i.test(key))    turnover  = value;
+        if (!netProfit && /net\s*profit/i.test(key)) netProfit = value;
+      });
 
       // ── Sector ────────────────────────────────────────────────────────────
       const sectorSet = new Set();
@@ -159,6 +167,7 @@ export class DaltonsScraper extends BaseScraper {
       if (tenure === 'Leasehold' && price) result.leasehold    = price;
       if (tenure === 'Freehold'  && price) result.freehold     = price;
       if (turnover)                        result.turnover     = turnover;
+      if (netProfit)                       result.net_profit   = netProfit;
       if (sector)                          result.sector       = sector;
       if (description)                     result.description  = description;
 
