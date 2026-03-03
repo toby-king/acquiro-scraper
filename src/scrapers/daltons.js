@@ -2,20 +2,23 @@
  * DaltonsScraper — scrapes business listings from daltonsbusiness.com.
  *
  * Pagination strategy:
- *   All pages → GET with ?page=N query parameter (server-rendered; no JS needed).
+ *   All pages → Playwright + waitForSelector (cards are JS-rendered after
+ *               DOMContentLoaded; plain fetch returns an empty skeleton).
  *
- * Selectors confirmed against live HTML on 2026-03-03:
+ * Selectors confirmed against live HTML on 2026-03-04:
  *
  *   Search results card:
  *     Container   div.item-listing-wrap
- *     Title link  h3.item-title > a[href]
+ *     Title link  .item-title a[href]  (div, not h3)
  *
  *   Listing detail page:
  *     Title        h1  (first)
  *     Location     address.item-address a  (deduplicated)
  *     Price/Tenure ul.item-price-wrap > li  (text parsed as "Key: Value")
+ *     Financials   ul.item-price-wrap li.item-annual-price  (one row per metric)
  *     Sector       div.property-overview-wrap li.property-overview-item a
- *     Description  div#viewMoreContent p
+ *     Description  #property-description-wrap
+ *     Image        div.property-top-wrap img.img-fluid
  */
 
 import * as cheerio from 'cheerio';
@@ -77,7 +80,7 @@ export class DaltonsScraper extends BaseScraper {
     const $ = cheerio.load(html);
     const urls = new Set();
 
-    $('div.item-listing-wrap h3.item-title a[href]').each((_, el) => {
+    $('div.item-listing-wrap .item-title a[href]').each((_, el) => {
       const href = $(el).attr('href')?.trim();
       if (!href) return;
       const abs = href.startsWith('http') ? href : `${BASE_URL}${href}`;
@@ -90,11 +93,10 @@ export class DaltonsScraper extends BaseScraper {
   /**
    * Parse a listing detail page.
    *
-   * Price and tenure are extracted from ul.item-price-wrap list items.
-   * Text format is typically "Key: Value" or just "Value" for some variants.
+   * Price and tenure come from ul.item-price-wrap li (plain items).
+   * Turnover and net profit come from ul.item-price-wrap li.item-annual-price
+   * (one labelled row per metric; first match per keyword is used).
    * Sector comes from the property overview section's category links.
-   * Turnover and net profit are not in structured fields on Daltons —
-   * they appear in the description text.
    */
   extractDetails(html, url) {
     try {
