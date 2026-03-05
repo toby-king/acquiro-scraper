@@ -170,10 +170,10 @@ export async function createScrapeLog({ added, archived, matches }) {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      last_run: new Date().toISOString(),
-      records_added: added,
-      records_archived: archived,
-      matches_made: matches,
+      last_run_date: new Date().toISOString(),
+      records_added_number: added,
+      records_archived_number: archived,
+      matched_made_number: matches,
     }),
   });
 
@@ -185,7 +185,7 @@ export async function getLatestScrapeLog() {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
 
-  const url = `${BUBBLE_BASE}/obj/Scrape_Log?sort_field=last_run&descending=true&limit=1`;
+  const url = `${BUBBLE_BASE}/obj/Scrape_Log?sort_field=last_run_date&descending=true&limit=1`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
 
   if (!res.ok) throw new Error(`Bubble getLatestScrapeLog returned HTTP ${res.status}`);

@@ -267,10 +267,10 @@ const server = createServer(async (req, res) => {
         schedulerEnabled,
         cronExpression,
         timezone: 'Europe/London',
-        lastRun:          lastLog?.last_run          ?? null,
-        lastRunAdded:     lastLog?.records_added     ?? null,
-        lastRunArchived:  lastLog?.records_archived  ?? null,
-        lastRunMatches:   lastLog?.matches_made      ?? null,
+        lastRun:          lastLog?.last_run_date          ?? null,
+        lastRunAdded:     lastLog?.records_added_number   ?? null,
+        lastRunArchived:  lastLog?.records_archived_number ?? null,
+        lastRunMatches:   lastLog?.matched_made_number    ?? null,
       });
     }
 
