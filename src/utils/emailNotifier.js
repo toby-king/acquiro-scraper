@@ -42,27 +42,23 @@ async function fetchBusinessDetails(match) {
 
 // ── Email generation ───────────────────────────────────────────────────────────
 
-function formatBusinessForPrompt(business, score) {
+function formatBusinessForPrompt(business) {
   if (!business) return null;
-  const name    = business.business_name_text ?? business.title_text ?? 'Unknown Business';
-  const price   = business.asking_price_text ?? business.asking_price_number ?? 'POA';
-  const sector  = business.sector_text ?? 'Unknown sector';
-  const loc     = business.location_text ?? 'UK';
-  const desc    = (business.description_text ?? '').slice(0, 300).trim();
-  const url     = business.url_text ?? '';
-  const pct     = score != null ? `${Math.round(score * 100)}%` : null;
+  const name   = business.business_name_text ?? business.title_text ?? 'Unknown Business';
+  const price  = business.asking_price_text ?? business.asking_price_number ?? 'POA';
+  const sector = business.sector_text ?? 'Unknown sector';
+  const loc    = business.location_text ?? 'UK';
+  const desc   = (business.description_text ?? '').slice(0, 300).trim();
 
   const lines = [
     `• ${name}`,
     `  Sector: ${sector} | Location: ${loc} | Asking: £${price}`,
-    pct ? `  Match score: ${pct}` : null,
     desc ? `  ${desc}${desc.length === 300 ? '…' : ''}` : null,
-    url ? `  View listing: ${url}` : null,
   ];
   return lines.filter(Boolean).join('\n');
 }
 
-async function generateEmailBody({ agentName, matches, isNewMatches }) {
+async function generateEmailBody({ agentName, userName, matches, isNewMatches }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const matchesText = matches
@@ -73,6 +69,10 @@ async function generateEmailBody({ agentName, matches, isNewMatches }) {
     ? `You have found ${matches.length} new acquisition opportunit${matches.length === 1 ? 'y' : 'ies'} for the user today.`
     : `There are no new matches today. Remind the user you are still searching, and surface these top matches from their existing pipeline as a reminder:`;
 
+  const modeInstructions = isNewMatches
+    ? `- For new matches: highlight why each opportunity is interesting.`
+    : `- For reminders: encourage the user to revisit these top opportunities.`;
+
   const prompt = `You are ${agentName}, an AI M&A advisor on the Acquiro platform. Write a short, professional and warm daily email update to the user.
 
 ${context}
@@ -82,8 +82,7 @@ ${matchesText}
 Instructions:
 - Write in first person as ${agentName}.
 - Keep the tone professional but approachable.
-- For new matches: highlight why each opportunity is interesting.
-- For reminders: encourage the user to revisit these top opportunities.
+${modeInstructions}
 - End with a brief encouraging note.
 - Return clean HTML (no \`\`\`html wrapper). Use <p>, <ul>, <li>, <strong> tags only.
 - Do not include subject line, To/From headers, or signatures.`;
@@ -93,7 +92,8 @@ Instructions:
     input: prompt,
   });
 
-  return response.output_text ?? response.output?.[0]?.content?.[0]?.text ?? '';
+  const body = response.output_text ?? response.output?.[0]?.content?.[0]?.text ?? '';
+  return `<p>Hi ${userName},</p>\n${body}`;
 }
 
 // ── Per-user pipeline ──────────────────────────────────────────────────────────
@@ -107,9 +107,10 @@ export async function sendEmailForUser(userId) {
     return { skipped: true, reason: 'no email' };
   }
 
-  // 2. Agent name
+  // 2. Agent name + user name
   const agent = await getAgentForUser(userId);
   const agentName = agent?.name_text ?? agent?.agent_name_text ?? 'Your Acquiro Advisor';
+  const userName = user?.name_text ?? 'there';
 
   // 3. Today's matches
   let matchRecords = await getTodaysMatchesForUser(userId);
@@ -129,10 +130,7 @@ export async function sendEmailForUser(userId) {
   const businesses = await Promise.all(businessPromises);
 
   const formattedMatches = matchRecords
-    .map((m, i) => {
-      const score = m.score_number ?? null;
-      return formatBusinessForPrompt(businesses[i], score);
-    })
+    .map((m, i) => formatBusinessForPrompt(businesses[i]))
     .filter(Boolean);
 
   if (formattedMatches.length === 0) {
@@ -141,7 +139,7 @@ export async function sendEmailForUser(userId) {
   }
 
   // 6. Generate email body
-  const emailBody = await generateEmailBody({ agentName, matches: formattedMatches, isNewMatches });
+  const emailBody = await generateEmailBody({ agentName, userName, matches: formattedMatches, isNewMatches });
 
   // 7. POST to Zapier
   const threadId = `${userId}_${new Date().toISOString().slice(0, 10)}`;

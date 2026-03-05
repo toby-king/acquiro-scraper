@@ -224,8 +224,8 @@ export async function getTodaysMatchesForUser(userId) {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
 
-  // Matches created in the last 24 hours (pipeline runs at 2am, emails at 8am)
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  // Matches created in the last 36 hours (pipeline runs at 2am, emails at 8am)
+  const since = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();
   const constraints = JSON.stringify([
     { key: 'user_user', constraint_type: 'equals', value: userId },
     { key: 'Created Date', constraint_type: 'greater than', value: since },
