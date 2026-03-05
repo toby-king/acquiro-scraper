@@ -32,8 +32,9 @@ import { RightbizScraper } from './scrapers/rightbiz.js';
 import { CoGoGoScraper } from './scrapers/cogogo.js';
 import { DaltonsScraper } from './scrapers/daltons.js';
 import { BusinessesForSaleScraper } from './scrapers/businessesforsale.js';
-import { getBuyerInfo, getActiveSubscribers } from './utils/bubbleClient.js';
+import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog } from './utils/bubbleClient.js';
 import { generateMatchesForUser } from './utils/matcher.js';
+import { runArchiver } from './archiver.js';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 
@@ -91,18 +92,21 @@ async function runScrape() {
   const pages   = parseInt(process.env.SCRAPE_PAGES ?? '20', 10);
 
   let totalListings = 0;
+  let totalAdded    = 0;
   for (const key of sources) {
     try {
       const scraper = SCRAPERS[key]();
       const listings = await scraper.scrape(pages);
-      console.log(`[pipeline] ${scraper.name} — ${listings.length} listings`);
+      const added = listings.filter(l => l?.db_id != null).length;
+      console.log(`[pipeline] ${scraper.name} — ${listings.length} listings, ${added} new`);
       totalListings += listings.length;
+      totalAdded    += added;
     } catch (err) {
       console.error(`[pipeline] ${key} scraper failed: ${err.message}`);
     }
   }
-  console.log(`[pipeline] Scraping complete — ${totalListings} listings total`);
-  return totalListings;
+  console.log(`[pipeline] Scraping complete — ${totalListings} listings total, ${totalAdded} new`);
+  return { totalListings, totalAdded };
 }
 
 async function runMatches() {
@@ -125,9 +129,18 @@ async function runMatches() {
 
 async function runDailyPipeline() {
   console.log('[pipeline] Starting daily pipeline…');
-  await runScrape();
-  const matchResult = await runMatches();
-  console.log(`[pipeline] Done — ${matchResult.matched} total new matches across ${matchResult.users} users`);
+  const { totalAdded }  = await runScrape();
+  const { archived }    = await runArchiver();
+  const matchResult     = await runMatches();
+
+  console.log(`[pipeline] Done — ${totalAdded} added, ${archived} archived, ${matchResult.matched} matches across ${matchResult.users} users`);
+
+  try {
+    await createScrapeLog({ added: totalAdded, archived, matches: matchResult.matched });
+    console.log('[pipeline] Scrape log written to Bubble');
+  } catch (err) {
+    console.error(`[pipeline] Failed to write scrape log: ${err.message}`);
+  }
 }
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
@@ -244,10 +257,20 @@ const server = createServer(async (req, res) => {
     }
 
     if (method === 'GET' && url === '/admin/status') {
+      let lastLog = null;
+      try {
+        lastLog = await getLatestScrapeLog();
+      } catch (err) {
+        console.warn('[admin] Could not fetch scrape log:', err.message);
+      }
       return send(res, 200, {
         schedulerEnabled,
         cronExpression,
         timezone: 'Europe/London',
+        lastRun:          lastLog?.last_run          ?? null,
+        lastRunAdded:     lastLog?.records_added     ?? null,
+        lastRunArchived:  lastLog?.records_archived  ?? null,
+        lastRunMatches:   lastLog?.matches_made      ?? null,
       });
     }
 

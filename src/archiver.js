@@ -64,7 +64,7 @@ async function checkUrl(url) {
   return { outcome: 'skip', reason: `HTTP ${status}` };
 }
 
-async function main() {
+export async function runArchiver() {
   let cursor = 0;
   let totalArchived = 0;
   let totalTouched  = 0;
@@ -103,9 +103,14 @@ async function main() {
   }
 
   log(`Done. Archived: ${totalArchived} | Touched: ${totalTouched} | Skipped: ${totalSkipped}`);
+  return { archived: totalArchived, touched: totalTouched, skipped: totalSkipped };
 }
 
-main().catch(err => {
-  console.error('[Archiver] Fatal error:', err);
-  process.exit(1);
-});
+// Standalone entrypoint: node src/archiver.js
+import { pathToFileURL } from 'url';
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  runArchiver().catch(err => {
+    console.error('[Archiver] Fatal error:', err);
+    process.exit(1);
+  });
+}

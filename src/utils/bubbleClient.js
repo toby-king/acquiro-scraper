@@ -159,6 +159,40 @@ export async function getActiveSubscribers() {
   return ids;
 }
 
+export async function createScrapeLog({ added, archived, matches }) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/Scrape_Log`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      last_run: new Date().toISOString(),
+      records_added: added,
+      records_archived: archived,
+      matches_made: matches,
+    }),
+  });
+
+  if (!res.ok) throw new Error(`Bubble createScrapeLog returned HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function getLatestScrapeLog() {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const url = `${BUBBLE_BASE}/obj/Scrape_Log?sort_field=last_run&descending=true&limit=1`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+
+  if (!res.ok) throw new Error(`Bubble getLatestScrapeLog returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response?.results?.[0] ?? null;
+}
+
 export async function getBuyerInfo(userId) {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
