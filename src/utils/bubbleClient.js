@@ -277,9 +277,9 @@ export async function createEmailRecord({ body, threadId, userId }) {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      body,
-      is_agent: true,
-      thread_id: threadId,
+      body_text: body,
+      is_agent_boolean: true,
+      thread_id_text: threadId,
       user: userId,
     }),
   });
