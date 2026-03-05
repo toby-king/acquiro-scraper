@@ -10,6 +10,7 @@
  *   6. Write an Email record to Bubble.
  */
 
+import { createHash } from 'crypto';
 import OpenAI from 'openai';
 import {
   getActiveSubscribers,
@@ -144,7 +145,9 @@ export async function sendEmailForUser(userId) {
   const emailBody = await generateEmailBody({ agentName, userName, matches: formattedMatches, isNewMatches });
 
   // 7. POST to Zapier
-  const threadId = `${userId}_${new Date().toISOString().slice(0, 10)}`;
+  const userHash = parseInt(createHash('sha256').update(userId).digest('hex').slice(0, 8), 16).toString(36);
+  const day = Math.floor(Date.now() / 86400000).toString(36);
+  const threadId = `${userHash}-${day}`;
 
   if (!ZAPIER_WEBHOOK) throw new Error('ZAPIER_WEBHOOK_URL env var is not set');
 
