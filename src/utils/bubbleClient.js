@@ -170,10 +170,10 @@ export async function createScrapeLog({ added, archived, matches }) {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      last_run_date: new Date().toISOString(),
-      records_added_number: added,
-      records_archived_number: archived,
-      matched_made_number: matches,
+      last_run: new Date().toISOString(),
+      records_added: added,
+      records_archived: archived,
+      matches_made: matches,
     }),
   });
 
@@ -191,6 +191,100 @@ export async function getLatestScrapeLog() {
   if (!res.ok) throw new Error(`Bubble getLatestScrapeLog returned HTTP ${res.status}`);
   const json = await res.json();
   return json.response?.results?.[0] ?? null;
+}
+
+export async function getUserDetails(userId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/user/${userId}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  if (!res.ok) throw new Error(`Bubble getUserDetails returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response;
+}
+
+export async function getAgentForUser(userId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'user_user', constraint_type: 'equals', value: userId },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/Agents?constraints=${encodeURIComponent(constraints)}&limit=1`;
+
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getAgentForUser returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response?.results?.[0] ?? null;
+}
+
+export async function getTodaysMatchesForUser(userId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  // Matches created in the last 24 hours (pipeline runs at 2am, emails at 8am)
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const constraints = JSON.stringify([
+    { key: 'user_user', constraint_type: 'equals', value: userId },
+    { key: 'Created Date', constraint_type: 'greater than', value: since },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/matches?constraints=${encodeURIComponent(constraints)}&limit=100`;
+
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getTodaysMatchesForUser returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response?.results ?? [];
+}
+
+export async function getTopMatchesForUser(userId, limit = 5) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'user_user', constraint_type: 'equals', value: userId },
+    { key: 'dismissed', constraint_type: 'equals', value: false },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/matches?constraints=${encodeURIComponent(constraints)}&sort_field=score_number&descending=true&limit=${limit}`;
+
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getTopMatchesForUser returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response?.results ?? [];
+}
+
+export async function getBusinessById(bubbleId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/Business/${bubbleId}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  if (!res.ok) throw new Error(`Bubble getBusinessById returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response;
+}
+
+export async function createEmailRecord({ body, threadId, userId }) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/Email`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      body,
+      is_agent: true,
+      thread_id: threadId,
+      user: userId,
+    }),
+  });
+  if (!res.ok) throw new Error(`Bubble createEmailRecord returned HTTP ${res.status}`);
+  return res.json();
 }
 
 export async function getBuyerInfo(userId) {

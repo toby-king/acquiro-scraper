@@ -35,6 +35,7 @@ import { BusinessesForSaleScraper } from './scrapers/businessesforsale.js';
 import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog } from './utils/bubbleClient.js';
 import { generateMatchesForUser } from './utils/matcher.js';
 import { runArchiver } from './archiver.js';
+import { runEmailNotifications, sendEmailForUser } from './utils/emailNotifier.js';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 
@@ -160,6 +161,17 @@ const scheduledJob = cron.schedule(cronExpression, async () => {
 }, { scheduled: true, timezone: 'Europe/London' });
 
 console.log(`[scheduler] Daily pipeline scheduled: ${cronExpression} (Europe/London)`);
+
+// ── Email scheduler (8am GMT daily) ───────────────────────────────────────────
+
+cron.schedule('0 8 * * *', async () => {
+  console.log('[scheduler] Daily email notifications triggered by cron');
+  await runEmailNotifications().catch((err) =>
+    console.error('[scheduler] Email notifications failed:', err.message),
+  );
+}, { scheduled: true, timezone: 'Europe/London' });
+
+console.log('[scheduler] Daily email notifications scheduled: 0 8 * * * (Europe/London)');
 
 // ── Request handler ───────────────────────────────────────────────────────────
 
@@ -308,6 +320,33 @@ const server = createServer(async (req, res) => {
         console.error('[admin] Match run failed:', err.message),
       );
       return send(res, 202, { ok: true, message: 'Match run started' });
+    }
+
+    if (method === 'POST' && url === '/admin/run-emails') {
+      console.log('[admin] Manual email notifications triggered');
+      runEmailNotifications().catch((err) =>
+        console.error('[admin] Email notifications failed:', err.message),
+      );
+      return send(res, 202, { ok: true, message: 'Email notifications started' });
+    }
+
+    if (method === 'POST' && url === '/admin/test-email') {
+      let body;
+      try {
+        body = await readBody(req);
+      } catch {
+        return send(res, 400, { error: 'Request body must be valid JSON' });
+      }
+      if (!body.user_id) {
+        return send(res, 400, { error: 'user_id is required' });
+      }
+      try {
+        const result = await sendEmailForUser(body.user_id);
+        return send(res, 200, { ok: true, ...result });
+      } catch (err) {
+        console.error(`[admin] test-email failed: ${err.message}`);
+        return send(res, 500, { error: 'Email failed', detail: err.message });
+      }
     }
 
     return send(res, 404, { error: 'Unknown admin endpoint' });
