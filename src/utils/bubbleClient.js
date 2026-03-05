@@ -280,7 +280,7 @@ export async function createEmailRecord({ body, threadId, userId }) {
       body_text: body,
       is_agent_boolean: true,
       thread_id_text: threadId,
-      user: userId,
+      user_user: userId,
     }),
   });
   if (!res.ok) {
