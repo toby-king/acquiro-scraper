@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node --env-file=.env src/server.js",
     "scrape": "node --env-file=.env src/index.js",
-    "server": "node --env-file=.env src/server.js"
+    "server": "node --env-file=.env src/server.js",
+    "seed": "node --env-file=.env src/seed.js",
+    "archive": "node --env-file=.env src/archiver.js"
   },
   "engines": {
     "node": ">=18.0.0"

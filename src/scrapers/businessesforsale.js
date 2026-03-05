@@ -36,6 +36,7 @@ import * as cheerio from 'cheerio';
 import { BaseScraper } from './base.js';
 import { createContext, humanScroll } from '../utils/browser.js';
 import { rateLimit } from '../utils/rateLimiter.js';
+import { getFormattedListingId } from '../utils/listingId.js';
 
 const BASE_URL = 'https://uk.businessesforsale.com';
 const SEARCH_PAGE_1 = `${BASE_URL}/uk/search/businesses-for-sale`;
@@ -136,6 +137,8 @@ export class BusinessesForSaleScraper extends BaseScraper {
         return null;
       }
 
+      const listing_id = getFormattedListingId(url, $);
+
       // ── Location ───────────────────────────────────────────────────────────
       const locationParts = [];
       $('div#address span').each((_, el) => {
@@ -190,7 +193,7 @@ export class BusinessesForSaleScraper extends BaseScraper {
         $('.listing-images img, .listing-header-image img, .listing-photo img')
           .first().attr('src') || null;
 
-      const result = { business_name: title, url };
+      const result = { listing_id, business_name: title, url };
       if (location)    result.location     = location;
       if (region)      result.region       = region;
       if (image)       result.image        = image;

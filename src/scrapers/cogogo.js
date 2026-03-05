@@ -20,6 +20,7 @@
 import * as cheerio from 'cheerio';
 import { BaseScraper } from './base.js';
 import { rateLimit, randomInt } from '../utils/rateLimiter.js';
+import { getFormattedListingId } from '../utils/listingId.js';
 
 const BASE_URL = 'https://letscogogo.com';
 
@@ -101,6 +102,8 @@ export class CoGoGoScraper extends BaseScraper {
         return null;
       }
 
+      const listing_id = getFormattedListingId(url, $);
+
       // ── Location ───────────────────────────────────────────────────────────
       const location =
         $('p.property-location').first().text().replace(/\s+/g, ' ').trim() || null;
@@ -160,7 +163,7 @@ export class CoGoGoScraper extends BaseScraper {
         ? sectorSlug.replace(/\b\w/g, (c) => c.toUpperCase())
         : null;
 
-      const result = { business_name: title, url };
+      const result = { listing_id, business_name: title, url };
       if (location)    result.location     = location;
       if (image)       result.image        = image;
       if (price)       result.asking_price = price;

@@ -24,6 +24,7 @@
 import * as cheerio from 'cheerio';
 import { BaseScraper } from './base.js';
 import { rateLimit, randomInt } from '../utils/rateLimiter.js';
+import { getFormattedListingId } from '../utils/listingId.js';
 
 const BASE_URL = 'https://www.rightbiz.co.uk';
 
@@ -158,6 +159,8 @@ export class RightbizScraper extends BaseScraper {
         return null;
       }
 
+      const listing_id = getFormattedListingId(url, $);
+
       // ── Location + Region ─────────────────────────────────────────────────
       // The page has multiple .location-item elements; the first one in the
       // main content area is the listing's location.
@@ -227,7 +230,7 @@ export class RightbizScraper extends BaseScraper {
         $('.content-body-img-slider-wrapper img').first().attr('src') ||
         null;
 
-      const result = { business_name: title, url };
+      const result = { listing_id, business_name: title, url };
       if (location)                        result.location    = location;
       if (region)                          result.region      = region;
       if (image)                           result.image       = image;

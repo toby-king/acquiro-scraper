@@ -66,8 +66,8 @@ function buildCleanMetadata(data) {
 export async function processAndIndexListing(scrapedData) {
   // 1. Write to Bubble (hard — must succeed)
   const bubbleResponse = await insertListing(scrapedData);
-  const bubbleId = bubbleResponse?.response?.listing_id;
-  if (!bubbleId) throw new Error('Bubble returned no listing_id');
+  const bubbleId = bubbleResponse?.response?._id;
+  if (!bubbleId) throw new Error('Bubble returned no _id');
 
   // 2. Build text to embed
   const goldenString = buildGoldenString(scrapedData);

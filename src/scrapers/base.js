@@ -276,6 +276,23 @@ export class BaseScraper {
     }
   }
 
+  // ── Public single-URL method (used by seed.js) ──────────────────────────────
+
+  /**
+   * Fetch and parse a single listing detail page.
+   * Returns the normalised listing object, or null if extraction fails.
+   * @param {string} url
+   * @returns {Promise<object | null>}
+   */
+  async scrapeDetail(url) {
+    const html = await this._fetchDetailPage(url);
+    const details = this.extractDetails(html, url);
+    if (!details) return null;
+    details.source = this.name;
+    this._normaliseFinancials(details);
+    return details;
+  }
+
   // ── Abstract interface (must be overridden by subclasses) ───────────────────
 
   /**
