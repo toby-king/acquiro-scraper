@@ -139,7 +139,7 @@ export async function getActiveSubscribers() {
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
 
   const constraints = JSON.stringify([
-    { key: 'is_subscribed', constraint_type: 'equals', value: true },
+    { key: 'is_subscribed_boolean', constraint_type: 'equals', value: true },
   ]);
 
   const ids = [];
