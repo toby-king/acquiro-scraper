@@ -83,7 +83,8 @@ Instructions:
 - Write in first person as ${agentName}.
 - Keep the tone professional but approachable.
 ${modeInstructions}
-- End with a brief encouraging note.
+- Do not start with a greeting (e.g. "Hello" or "Hi") — the greeting is added separately.
+- End with a brief encouraging note but do not sign off — the sign-off is added separately.
 - Return clean HTML (no \`\`\`html wrapper). Use <p>, <ul>, <li>, <strong> tags only.
 - Do not include subject line, To/From headers, or signatures.`;
 
@@ -93,7 +94,8 @@ ${modeInstructions}
   });
 
   const body = response.output_text ?? response.output?.[0]?.content?.[0]?.text ?? '';
-  return `<p>Hi ${userName},</p>\n${body}`;
+  const footer = `<p>Interested? Just reply to this email.</p>\n<p>If you would like more information on any of these, simply reply and I will send over the full details. You can also reply to update your search criteria at any time and I will adjust your matches accordingly.</p>\n<p>${agentName}</p>`;
+  return `<p>Hi ${userName},</p>\n${body}\n${footer}`;
 }
 
 // ── Per-user pipeline ──────────────────────────────────────────────────────────
