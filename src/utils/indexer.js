@@ -3,13 +3,6 @@ import { Pinecone } from '@pinecone-database/pinecone';
 import { insertListing, checkListingExists, getBubbleIdByListingId, touchListing } from './bubbleClient.js';
 import { classifySectors } from './sectorClassifier.js';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
-
-const PINECONE_INDEX_NAME = process.env.PINECONE_INDEX_NAME;
-if (!PINECONE_INDEX_NAME) throw new Error('PINECONE_INDEX_NAME env var is not set');
-
-const index = pinecone.index(PINECONE_INDEX_NAME);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -82,6 +75,12 @@ export async function processAndIndexListing(scrapedData) {
   if (!bubbleId) throw new Error('Bubble returned no _id');
 
   // 2. Build text to embed
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
+  const pineconeIndexName = process.env.PINECONE_INDEX_NAME;
+  if (!pineconeIndexName) throw new Error('PINECONE_INDEX_NAME env var is not set');
+  const index = pinecone.index(pineconeIndexName);
+
   const goldenString = buildGoldenString(scrapedData);
 
   // 3. Embed with OpenAI (soft failure)

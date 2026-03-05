@@ -1,7 +1,5 @@
 import OpenAI from 'openai';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
 /**
  * The canonical sector labels — must exactly match the Bubble option set values
  * so that normalised_sectors can be compared directly against buyer preferences.
@@ -49,6 +47,7 @@ export async function classifySectors(businessName, rawSector, description) {
   if (description)  parts.push(`Description: ${String(description).slice(0, 300)}`);
 
   try {
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const res = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
