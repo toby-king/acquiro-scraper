@@ -25,6 +25,7 @@ import * as cheerio from 'cheerio';
 import { BaseScraper } from './base.js';
 import { createContext, humanScroll } from '../utils/browser.js';
 import { rateLimit } from '../utils/rateLimiter.js';
+import { getFormattedListingId } from '../utils/listingId.js';
 
 const BASE_URL = 'https://www.daltonsbusiness.com';
 const SEARCH_BASE =
@@ -45,7 +46,7 @@ export class DaltonsScraper extends BaseScraper {
     const url =
       pageNum === 1
         ? SEARCH_BASE
-        : `${SEARCH_BASE}&page=${pageNum}`;
+        : `${BASE_URL}/listing-businesses-for-sale/page/${pageNum}/?sortby=d_date&flt=1`;
 
     const html = await this._fetchSearchPage(url);
     return this._extractUrlsFromHtml(html);
@@ -109,6 +110,8 @@ export class DaltonsScraper extends BaseScraper {
         this._log(`Skipping ${url} — no title found (may be blocked or 404)`);
         return null;
       }
+
+      const listing_id = getFormattedListingId(url, $);
 
       // ── Location + Region ─────────────────────────────────────────────────
       // address.item-address can repeat the same item — deduplicate while
@@ -186,7 +189,7 @@ export class DaltonsScraper extends BaseScraper {
       const image =
         $('div.property-top-wrap img.img-fluid').first().attr('src') || null;
 
-      const result = { business_name: title, url };
+      const result = { listing_id, business_name: title, url };
       if (location)                        result.location     = location;
       if (region)                          result.region       = region;
       if (image)                           result.image        = image;
