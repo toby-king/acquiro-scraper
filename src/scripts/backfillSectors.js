@@ -13,7 +13,6 @@
  *   --dry-run   Classify and log but don't write to Pinecone
  */
 
-import 'dotenv/config';
 import { Pinecone } from '@pinecone-database/pinecone';
 import { classifySectors } from '../utils/sectorClassifier.js';
 
@@ -63,7 +62,7 @@ async function fetchAllBubbleBusinesses() {
  * Returns a map of id → metadata.
  */
 async function fetchPineconeBatch(index, ids) {
-  const res = await index.fetch(ids);
+  const res = await index.fetch({ ids });
   const map = {};
   for (const [id, record] of Object.entries(res.records ?? {})) {
     map[id] = record.metadata ?? {};
@@ -108,6 +107,7 @@ async function main() {
     return;
   }
 
+  // Debug: show first record's keys so we can confirm the ID field name
   // 2. Fetch existing Pinecone metadata in batches to detect already-classified records
   console.log('[backfill] Fetching existing Pinecone metadata…');
   const ids = businesses.map((b) => b._id).filter(Boolean);
@@ -142,13 +142,12 @@ async function main() {
   let failed = 0;
 
   await processBatches(toClassify, PINECONE_FETCH_BATCH, CLASSIFY_CONCURRENCY, async (business) => {
-    const { _id, business_name, sector, description } = business;
+    const { _id } = business;
+    const business_name = business.business_name_text ?? business.business_name ?? '(unknown)';
+    const sector        = business.sector1_text       ?? business.sector        ?? null;
+    const description   = business.description_text   ?? business.description   ?? null;
 
-    const normalisedSectors = await classifySectors(
-      business_name ?? '(unknown)',
-      sector ?? null,
-      description ?? null,
-    );
+    const normalisedSectors = await classifySectors(business_name, sector, description);
 
     done++;
     process.stdout.write(
@@ -168,7 +167,7 @@ async function main() {
     const updatedMeta = { ...existing, normalised_sectors: normalisedSectors };
 
     // Upsert requires the vector — fetch it from Pinecone
-    const fetchRes = await index.fetch([_id]);
+    const fetchRes = await index.fetch({ ids: [_id] });
     const record = fetchRes.records?.[_id];
     if (!record?.values?.length) {
       console.warn(`\n[backfill] No vector found in Pinecone for ${_id} — skipping`);
@@ -176,7 +175,7 @@ async function main() {
       return;
     }
 
-    await index.upsert([{ id: _id, values: record.values, metadata: updatedMeta }]);
+    await index.upsert({ records: [{ id: _id, values: record.values, metadata: updatedMeta }] });
   });
 
   console.log(); // newline after progress
