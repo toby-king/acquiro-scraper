@@ -49,9 +49,16 @@ const VALID_SOURCES = Object.keys(SCRAPERS).filter((k) => k !== 'bfs').join(', '
 
 // ── Generic helpers ───────────────────────────────────────────────────────────
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
 function send(res, status, body) {
   const json = JSON.stringify(body);
   res.writeHead(status, {
+    ...CORS_HEADERS,
     'Content-Type': 'application/json',
     'Content-Length': Buffer.byteLength(json),
   });
@@ -145,6 +152,13 @@ console.log(`[scheduler] Daily pipeline scheduled: ${cronExpression} (Europe/Lon
 
 const server = createServer(async (req, res) => {
   const { method, url } = req;
+
+  // ── CORS preflight ──────────────────────────────────────────────────────────
+  if (method === 'OPTIONS') {
+    res.writeHead(204, CORS_HEADERS);
+    res.end();
+    return;
+  }
 
   // ── POST /scrape ────────────────────────────────────────────────────────────
   if (method === 'POST' && url === '/scrape') {

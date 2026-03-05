@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:letscogogo.com)",
+      "WebFetch(domain:www.daltonsbusiness.com)",
+      "WebFetch(domain:uk.businessesforsale.com)",
+      "Bash(curl:*)",
+      "WebFetch(domain:www.rightbiz.co.uk)",
+      "WebSearch",
+      "WebFetch(domain:webcache.googleusercontent.com)",
+      "WebFetch(domain:web.archive.org)",
+      "WebFetch(domain:apify.com)",
+      "WebFetch(domain:www.businessesforsale.com)",
+      "WebFetch(domain:uk.trustpilot.com)",
+      "Bash(node:*)",
+      "Bash(npm install:*)",
+      "WebFetch(domain:railway.com)"
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 # Acquiro Scraper — API Reference
 
-Base URL: `https://your-app.railway.app`
+Base URL: `acquiro-scraper-production.up.railway.app`
 
 ---
 
