@@ -283,7 +283,10 @@ export async function createEmailRecord({ body, threadId, userId }) {
       user: userId,
     }),
   });
-  if (!res.ok) throw new Error(`Bubble createEmailRecord returned HTTP ${res.status}`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Bubble createEmailRecord returned HTTP ${res.status}: ${text}`);
+  }
   return res.json();
 }
 
