@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { Pinecone } from '@pinecone-database/pinecone';
-import { insertListing } from './bubbleClient.js';
+import { insertListing, checkListingExists, getBubbleIdByListingId, touchListing } from './bubbleClient.js';
 import { classifySectors } from './sectorClassifier.js';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -65,6 +65,17 @@ function buildCleanMetadata(data) {
  * @returns {Promise<string>} Bubble record ID
  */
 export async function processAndIndexListing(scrapedData) {
+  // Deduplication: skip listings already in Bubble
+  if (scrapedData.listing_id) {
+    const exists = await checkListingExists(scrapedData.listing_id);
+    if (exists) {
+      const bubbleId = await getBubbleIdByListingId(scrapedData.listing_id);
+      if (bubbleId) await touchListing(bubbleId);
+      console.log(`[indexer] Skipping existing listing: ${scrapedData.listing_id}`);
+      return null;
+    }
+  }
+
   // 1. Write to Bubble (hard — must succeed)
   const bubbleResponse = await insertListing(scrapedData);
   const bubbleId = bubbleResponse?.response?._id;

@@ -116,6 +116,49 @@ export async function getExistingMatches(userId) {
   return ids;
 }
 
+export async function getBubbleIdByListingId(listing_id) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'listing_id', constraint_type: 'equals', value: listing_id },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/Business?constraints=${encodeURIComponent(constraints)}&limit=1`;
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+
+  if (!res.ok) throw new Error(`Bubble getBubbleIdByListingId returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response?.results?.[0]?._id ?? null;
+}
+
+export async function getActiveSubscribers() {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'is_subscribed', constraint_type: 'equals', value: true },
+  ]);
+
+  const ids = [];
+  let cursor = 0;
+
+  while (true) {
+    const url = `${BUBBLE_BASE}/obj/user?constraints=${encodeURIComponent(constraints)}&limit=100&cursor=${cursor}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+    if (!res.ok) throw new Error(`Bubble getActiveSubscribers returned HTTP ${res.status}`);
+    const json = await res.json();
+    const { results, remaining } = json.response;
+    results.forEach((u) => { if (u._id) ids.push(u._id); });
+    if (!remaining || remaining === 0) break;
+    cursor += results.length;
+  }
+
+  return ids;
+}
+
 export async function getBuyerInfo(userId) {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
