@@ -90,3 +90,43 @@ export async function touchListing(bubbleId) {
   if (!res.ok) throw new Error(`Bubble touchListing returned HTTP ${res.status}`);
   return res.json();
 }
+
+export async function getExistingMatches(userId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'user_user', constraint_type: 'equals', value: userId },
+  ]);
+
+  const ids = [];
+  let cursor = 0;
+
+  while (true) {
+    const url = `${BUBBLE_BASE}/obj/matches?constraints=${encodeURIComponent(constraints)}&limit=100&cursor=${cursor}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+    if (!res.ok) throw new Error(`Bubble getExistingMatches returned HTTP ${res.status}`);
+    const json = await res.json();
+    const { results, remaining } = json.response;
+    results.forEach((m) => { if (m.business_custom_business) ids.push(m.business_custom_business); });
+    if (!remaining || remaining === 0) break;
+    cursor += results.length;
+  }
+
+  return ids;
+}
+
+export async function getBuyerInfo(userId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'user_user', constraint_type: 'equals', value: userId },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/Buyer_Info?constraints=${encodeURIComponent(constraints)}&sort_field=Created Date&descending=true&limit=1`;
+
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getBuyerInfo returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response; // { results, count, remaining }
+}

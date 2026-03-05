@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { Pinecone } from '@pinecone-database/pinecone';
 import { insertListing } from './bubbleClient.js';
+import { classifySectors } from './sectorClassifier.js';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
@@ -87,6 +88,17 @@ export async function processAndIndexListing(scrapedData) {
 
   // 4. Build clean Pinecone metadata
   const metadata = buildCleanMetadata(scrapedData);
+
+  // 4a. Classify into canonical sectors (soft failure — empty array if it fails)
+  const normalisedSectors = await classifySectors(
+    scrapedData.business_name,
+    scrapedData.sector ?? null,
+    scrapedData.description ?? null,
+  );
+  if (normalisedSectors.length > 0) {
+    metadata.normalised_sectors = normalisedSectors;
+  }
+  console.log(`[indexer] normalised_sectors for "${scrapedData.business_name}": [${normalisedSectors.join(', ')}]`);
 
   // 5. Upsert into Pinecone (soft failure)
   try {
