@@ -270,7 +270,7 @@ export async function createEmailRecord({ body, threadId, userId }) {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
 
-  const res = await fetch(`${BUBBLE_BASE}/obj/Email`, {
+  const res = await fetch(`${BUBBLE_BASE}/obj/Emails`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

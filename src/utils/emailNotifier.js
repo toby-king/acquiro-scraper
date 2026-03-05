@@ -152,7 +152,7 @@ export async function sendEmailForUser(userId) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      email_body: emailBody,
+      body: emailBody,
       agent_name: agentName,
       user_email: email,
       thread_id: threadId,
