@@ -33,6 +33,23 @@ function cosineSimilarity(a, b) {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
+function sanitiseAgentName(name) {
+  return (name ?? 'agent')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // strip diacritics
+    .replace(/[^a-zA-Z0-9]/g, '')    // remove spaces + special chars
+    .toLowerCase() || 'agent';
+}
+
+function agentDisplayName(name) {
+  const titled = (name ?? 'Agent')
+    .trim()
+    .split(/\s+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+  return `${titled} @ Acquiro`;
+}
+
 function buildListingGoldenString(listing) {
   const parts = [];
   if (listing.business_name) parts.push(listing.business_name + '.');
@@ -42,7 +59,7 @@ function buildListingGoldenString(listing) {
   return parts.join(' ') || '(no description)';
 }
 
-async function sendViaSendGrid({ from, to, subject, body }) {
+async function sendViaSendGrid({ from, fromName, to, subject, body }) {
   const apiKey = process.env.SENDGRID_API_KEY;
   if (!apiKey) throw new Error('SENDGRID_API_KEY env var is not set');
 
@@ -54,7 +71,7 @@ async function sendViaSendGrid({ from, to, subject, body }) {
     },
     body: JSON.stringify({
       personalizations: [{ to: [{ email: to }] }],
-      from: { email: from },
+      from: { email: from, name: fromName ?? 'Acquiro' },
       subject,
       content: [{ type: 'text/plain', value: body }],
     }),
@@ -265,14 +282,18 @@ export async function sendApprovedOutreach(outreachId) {
 
   const userId = outreach.user_user;
   const agent  = await getAgentForUser(userId);
-  if (!agent?.email_text) throw new Error(`Agent email not set for user ${userId}`);
 
-  const ref = outreach.listing_id_text?.replace('langcliffe-', '') ?? '';
+  const rawName    = agent?.name_text ?? agent?.name ?? 'agent';
+  const fromEmail  = `${sanitiseAgentName(rawName)}@acquiro-agent.com`;
+  const fromName   = agentDisplayName(rawName);
+
+  const ref = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
   const subject = `Acquisition enquiry — Ref ${ref}: ${outreach.business_name_text ?? 'Business opportunity'}`;
 
   await sendViaSendGrid({
-    from:    agent.email_text,
-    to:      outreach.langcliffe_contact_text,
+    from:     fromEmail,
+    fromName,
+    to:       outreach.langcliffe_contact_text,
     subject,
     body:    outreach.draft_body_text,
   });
