@@ -415,7 +415,6 @@ export async function approveOutreach(outreachId) {
     body: JSON.stringify({ status_text: 'sent', sent_at_date: new Date().toISOString() }),
   });
   if (!res.ok) throw new Error(`Bubble approveOutreach returned HTTP ${res.status}`);
-  return res.json();
 }
 
 export async function rejectOutreach(outreachId, newDraftBody) {
@@ -431,7 +430,6 @@ export async function rejectOutreach(outreachId, newDraftBody) {
     body: JSON.stringify({ draft_body_text: newDraftBody, status_text: 'pending' }),
   });
   if (!res.ok) throw new Error(`Bubble rejectOutreach returned HTTP ${res.status}`);
-  return res.json();
 }
 
 export async function getBuyerInfo(userId) {
