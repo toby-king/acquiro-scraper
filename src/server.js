@@ -453,7 +453,7 @@ const server = createServer(async (req, res) => {
 
       const listingsWithBubbleIds = [];
       for (const listing of parsed.listings) {
-        const listingId = `langcliffe-${listing.ref_id}`;
+        const listingId = `langcliffe_${listing.ref_id}`;
         try {
           const bubbleId = await processAndIndexListing({
             listing_id: listingId, business_name: listing.business_name,
@@ -483,7 +483,7 @@ const server = createServer(async (req, res) => {
         try {
           await processLangcliffeListings({ userId, listingsWithBubbleIds, langcliffeContact: parsed.langcliffeEmail });
           result.outreach = listingsWithBubbleIds.map(({ listing }) => ({
-            listingId: `langcliffe-${listing.ref_id}`, status: 'draft_created_or_skipped',
+            listingId: `langcliffe_${listing.ref_id}`, status: 'draft_created_or_skipped',
           }));
         } catch (err) {
           result.outreach = [{ status: 'error', error: err.message }];
@@ -562,7 +562,7 @@ const server = createServer(async (req, res) => {
       // Index each listing into Bubble + Pinecone
       const listingsWithBubbleIds = [];
       for (const listing of listings) {
-        const listingId = `langcliffe-${listing.ref_id}`;
+        const listingId = `langcliffe_${listing.ref_id}`;
         try {
           const bubbleId = await processAndIndexListing({
             listing_id:    listingId,

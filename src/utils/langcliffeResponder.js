@@ -173,7 +173,7 @@ export async function processLangcliffeListings({ userId, listingsWithBubbleIds,
   const agentEmail = agent.email_text ?? null;
 
   for (const { bubbleId, listing } of listingsWithBubbleIds) {
-    const listingId = `langcliffe-${listing.ref_id}`;
+    const listingId = `langcliffe_${listing.ref_id}`;
 
     // Dedup: skip if outreach already exists for this user + listing
     const exists = await checkOutreachExists(userId, listingId);
