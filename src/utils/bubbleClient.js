@@ -5,6 +5,7 @@ export async function insertListing(listing) {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
 
+  console.log(`[bubble] insertListing → ${ENDPOINT} listing_id=${listing.listing_id}`);
   const res = await fetch(ENDPOINT, {
     method: 'POST',
     headers: {
@@ -14,11 +15,13 @@ export async function insertListing(listing) {
     body: JSON.stringify(listing),
   });
 
+  console.log(`[bubble] insertListing response status=${res.status}`);
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error(`Bubble insert_listing returned HTTP ${res.status}: ${errText.substring(0, 200)}`);
   }
   const insertText = await res.text();
+  console.log(`[bubble] insertListing body="${insertText.substring(0, 200)}"`);
   if (!insertText.trim()) throw new Error('Bubble insert_listing returned empty response body (status ' + res.status + ')');
   try {
     return JSON.parse(insertText);
@@ -36,10 +39,12 @@ export async function checkListingExists(listing_id) {
   ]);
   const url = `${BUBBLE_BASE}/obj/Business?constraints=${encodeURIComponent(constraints)}`;
 
+  console.log(`[bubble] checkListingExists listing_id=${listing_id}`);
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${apiKey}` },
   });
 
+  console.log(`[bubble] checkListingExists response status=${res.status}`);
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error(`Bubble checkListingExists returned HTTP ${res.status}: ${errText.substring(0, 200)}`);
