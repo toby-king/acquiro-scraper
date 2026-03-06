@@ -1,6 +1,5 @@
 [build]
-builder = "RAILPACK"
-installCommand = "npm ci && npx playwright install chromium --with-deps"
+builder = "NIXPACKS"
 
 [deploy]
 startCommand = "node src/server.js"
