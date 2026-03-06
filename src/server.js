@@ -368,6 +368,130 @@ const server = createServer(async (req, res) => {
       }
     }
 
+    // ── Langcliffe queue endpoints ───────────────────────────────────────────
+    if (url.startsWith('/admin/langcliffe-queue')) {
+      // GET /admin/langcliffe-queue
+      if (method === 'GET' && url === '/admin/langcliffe-queue') {
+        try {
+          const queue = await getPendingOutreachQueue();
+          return send(res, 200, { count: queue.length, queue });
+        } catch (err) {
+          return send(res, 500, { error: 'Failed to fetch queue', detail: err.message });
+        }
+      }
+
+      // POST /admin/langcliffe-queue/:id/approve
+      const approveMatch = url.match(/^\/admin\/langcliffe-queue\/([^/]+)\/approve$/);
+      if (method === 'POST' && approveMatch) {
+        const outreachId = approveMatch[1];
+        try {
+          await sendApprovedOutreach(outreachId);
+          return send(res, 200, { ok: true, message: 'Outreach sent and status updated to sent' });
+        } catch (err) {
+          console.error(`[admin] approve failed for ${outreachId}: ${err.message}`);
+          return send(res, 500, { error: 'Approval failed', detail: err.message });
+        }
+      }
+
+      // POST /admin/langcliffe-queue/:id/reject
+      const rejectMatch = url.match(/^\/admin\/langcliffe-queue\/([^/]+)\/reject$/);
+      if (method === 'POST' && rejectMatch) {
+        const outreachId = rejectMatch[1];
+        let body = {};
+        try {
+          body = await readBody(req);
+        } catch { /* feedback is optional — ignore parse errors */ }
+        try {
+          const newDraft = await rewriteOutreachDraft(outreachId, body.feedback ?? null);
+          return send(res, 200, { ok: true, message: 'Draft rewritten and reset to pending', draft: newDraft });
+        } catch (err) {
+          console.error(`[admin] reject failed for ${outreachId}: ${err.message}`);
+          return send(res, 500, { error: 'Rewrite failed', detail: err.message });
+        }
+      }
+
+      return send(res, 404, { error: 'Unknown Langcliffe queue endpoint' });
+    }
+
+    // ── POST /admin/test-langcliffe ──────────────────────────────────────────
+    if (method === 'POST' && url === '/admin/test-langcliffe') {
+      let body = {};
+      try { body = await readBody(req); } catch (err) {
+        return send(res, 400, { error: 'Invalid JSON body' });
+      }
+
+      const toEmail   = (body.to   ?? '').toLowerCase().trim();
+      const emailText = body.text  ?? '';
+
+      if (!toEmail || !emailText) {
+        return send(res, 400, { error: 'Required: "to" (agent email) and "text" (email body)' });
+      }
+
+      const result = { to: toEmail, agent: null, parsed: null, indexed: [], outreach: [] };
+
+      let agent;
+      try {
+        agent = await getAgentByEmail(toEmail);
+      } catch (err) {
+        return send(res, 500, { error: `getAgentByEmail failed: ${err.message}`, result });
+      }
+      if (!agent) return send(res, 404, { error: `No agent found for email: ${toEmail}`, result });
+      result.agent = { id: agent._id, userId: agent.user_user };
+
+      const userId = agent.user_user;
+
+      let parsed;
+      try {
+        parsed = await parseLangcliffeEmail(emailText);
+      } catch (err) {
+        return send(res, 500, { error: `parseLangcliffeEmail failed: ${err.message}`, result });
+      }
+      if (!parsed) {
+        return send(res, 200, { ok: false, message: 'Not recognised as a Langcliffe teaser email', result });
+      }
+      result.parsed = { langcliffeEmail: parsed.langcliffeEmail, listingCount: parsed.listings.length, listings: parsed.listings };
+
+      const listingsWithBubbleIds = [];
+      for (const listing of parsed.listings) {
+        const listingId = `langcliffe-${listing.ref_id}`;
+        try {
+          const bubbleId = await processAndIndexListing({
+            listing_id: listingId, business_name: listing.business_name,
+            sector: listing.sector, location: listing.location,
+            turnover: listing.turnover, ebitda: listing.ebitda,
+            description: listing.description, source: 'langcliffe', url: null,
+          });
+          if (bubbleId) {
+            listingsWithBubbleIds.push({ bubbleId, listing });
+            result.indexed.push({ listingId, bubbleId, status: 'created' });
+          } else {
+            const existingId = await getBubbleIdByListingId(listingId);
+            if (existingId) {
+              listingsWithBubbleIds.push({ bubbleId: existingId, listing });
+              result.indexed.push({ listingId, bubbleId: existingId, status: 'already_exists' });
+            } else {
+              result.indexed.push({ listingId, bubbleId: null, status: 'failed_no_id' });
+            }
+          }
+        } catch (err) {
+          result.indexed.push({ listingId, bubbleId: null, status: 'error', error: err.message });
+        }
+      }
+
+      if (listingsWithBubbleIds.length > 0) {
+        try {
+          await processLangcliffeListings({ userId, listingsWithBubbleIds, langcliffeContact: parsed.langcliffeEmail });
+          result.outreach = listingsWithBubbleIds.map(({ listing }) => ({
+            listingId: `langcliffe-${listing.ref_id}`, status: 'draft_created_or_skipped',
+          }));
+        } catch (err) {
+          result.outreach = [{ status: 'error', error: err.message }];
+        }
+      }
+
+      return send(res, 200, { ok: true, message: 'Test pipeline completed — check result for details', result });
+    }
+
     return send(res, 404, { error: 'Unknown admin endpoint' });
   }
 
@@ -477,147 +601,6 @@ const server = createServer(async (req, res) => {
     })().catch((err) => console.error('[webhook] Unhandled async error:', err.message));
 
     return; // response already sent above
-  }
-
-  // ── Langcliffe admin endpoints (within the /admin block below) ───────────────
-
-  if (url.startsWith('/admin/langcliffe-queue')) {
-    if (!process.env.ADMIN_API_KEY) {
-      return send(res, 503, { error: 'Admin endpoints are not configured (ADMIN_API_KEY not set)' });
-    }
-    if (!checkAdminAuth(req)) {
-      return send(res, 401, { error: 'Unauthorized' });
-    }
-
-    // GET /admin/langcliffe-queue
-    if (method === 'GET' && url === '/admin/langcliffe-queue') {
-      try {
-        const queue = await getPendingOutreachQueue();
-        return send(res, 200, { count: queue.length, queue });
-      } catch (err) {
-        return send(res, 500, { error: 'Failed to fetch queue', detail: err.message });
-      }
-    }
-
-    // POST /admin/langcliffe-queue/:id/approve
-    const approveMatch = url.match(/^\/admin\/langcliffe-queue\/([^/]+)\/approve$/);
-    if (method === 'POST' && approveMatch) {
-      const outreachId = approveMatch[1];
-      try {
-        await sendApprovedOutreach(outreachId);
-        return send(res, 200, { ok: true, message: 'Outreach sent and status updated to sent' });
-      } catch (err) {
-        console.error(`[admin] approve failed for ${outreachId}: ${err.message}`);
-        return send(res, 500, { error: 'Approval failed', detail: err.message });
-      }
-    }
-
-    // POST /admin/langcliffe-queue/:id/reject
-    const rejectMatch = url.match(/^\/admin\/langcliffe-queue\/([^/]+)\/reject$/);
-    if (method === 'POST' && rejectMatch) {
-      const outreachId = rejectMatch[1];
-      let body = {};
-      try {
-        body = await readBody(req);
-      } catch { /* feedback is optional — ignore parse errors */ }
-      try {
-        const newDraft = await rewriteOutreachDraft(outreachId, body.feedback ?? null);
-        return send(res, 200, { ok: true, message: 'Draft rewritten and reset to pending', draft: newDraft });
-      } catch (err) {
-        console.error(`[admin] reject failed for ${outreachId}: ${err.message}`);
-        return send(res, 500, { error: 'Rewrite failed', detail: err.message });
-      }
-    }
-
-    return send(res, 404, { error: 'Unknown Langcliffe queue endpoint' });
-  }
-
-  // ── POST /admin/test-langcliffe ──────────────────────────────────────────────
-  // Simulates a forwarded Langcliffe email without needing SendGrid Inbound Parse.
-  // Body: { "to": "agent@acquiro.ai", "text": "<full email body>" }
-  // Returns a detailed breakdown of what was parsed, indexed, and drafted.
-  if (method === 'POST' && url === '/admin/test-langcliffe') {
-    if (!checkAdminAuth(req)) return send(res, 401, { error: 'Unauthorized' });
-
-    let body = {};
-    try { body = await readBody(req); } catch (err) {
-      return send(res, 400, { error: 'Invalid JSON body' });
-    }
-
-    const toEmail   = (body.to   ?? '').toLowerCase().trim();
-    const emailText = body.text  ?? '';
-
-    if (!toEmail || !emailText) {
-      return send(res, 400, { error: 'Required: "to" (agent email) and "text" (email body)' });
-    }
-
-    const result = { to: toEmail, agent: null, parsed: null, indexed: [], outreach: [] };
-
-    // 1. Look up agent
-    let agent;
-    try {
-      agent = await getAgentByEmail(toEmail);
-    } catch (err) {
-      return send(res, 500, { error: `getAgentByEmail failed: ${err.message}`, result });
-    }
-    if (!agent) return send(res, 404, { error: `No agent found for email: ${toEmail}`, result });
-    result.agent = { id: agent._id, userId: agent.user_user };
-
-    const userId = agent.user_user;
-
-    // 2. Parse email
-    let parsed;
-    try {
-      parsed = await parseLangcliffeEmail(emailText);
-    } catch (err) {
-      return send(res, 500, { error: `parseLangcliffeEmail failed: ${err.message}`, result });
-    }
-    if (!parsed) {
-      return send(res, 200, { ok: false, message: 'Not recognised as a Langcliffe teaser email', result });
-    }
-    result.parsed = { langcliffeEmail: parsed.langcliffeEmail, listingCount: parsed.listings.length, listings: parsed.listings };
-
-    // 3. Index listings
-    const listingsWithBubbleIds = [];
-    for (const listing of parsed.listings) {
-      const listingId = `langcliffe-${listing.ref_id}`;
-      try {
-        const bubbleId = await processAndIndexListing({
-          listing_id: listingId, business_name: listing.business_name,
-          sector: listing.sector, location: listing.location,
-          turnover: listing.turnover, ebitda: listing.ebitda,
-          description: listing.description, source: 'langcliffe', url: null,
-        });
-        if (bubbleId) {
-          listingsWithBubbleIds.push({ bubbleId, listing });
-          result.indexed.push({ listingId, bubbleId, status: 'created' });
-        } else {
-          const existingId = await getBubbleIdByListingId(listingId);
-          if (existingId) {
-            listingsWithBubbleIds.push({ bubbleId: existingId, listing });
-            result.indexed.push({ listingId, bubbleId: existingId, status: 'already_exists' });
-          } else {
-            result.indexed.push({ listingId, bubbleId: null, status: 'failed_no_id' });
-          }
-        }
-      } catch (err) {
-        result.indexed.push({ listingId, bubbleId: null, status: 'error', error: err.message });
-      }
-    }
-
-    // 4. Score and draft outreach
-    if (listingsWithBubbleIds.length > 0) {
-      try {
-        await processLangcliffeListings({ userId, listingsWithBubbleIds, langcliffeContact: parsed.langcliffeEmail });
-        result.outreach = listingsWithBubbleIds.map(({ listing }) => ({
-          listingId: `langcliffe-${listing.ref_id}`, status: 'draft_created_or_skipped',
-        }));
-      } catch (err) {
-        result.outreach = [{ status: 'error', error: err.message }];
-      }
-    }
-
-    return send(res, 200, { ok: true, message: 'Test pipeline completed — check result for details', result });
   }
 
   // ── 404 fallback ────────────────────────────────────────────────────────────
