@@ -93,7 +93,6 @@ export async function archiveListing(bubbleId) {
   });
 
   if (!res.ok) throw new Error(`Bubble archiveListing returned HTTP ${res.status}`);
-  return res.json();
 }
 
 export async function touchListing(bubbleId) {
@@ -111,7 +110,6 @@ export async function touchListing(bubbleId) {
   });
 
   if (!res.ok) throw new Error(`Bubble touchListing returned HTTP ${res.status}`);
-  return res.json();
 }
 
 export async function getExistingMatches(userId) {
