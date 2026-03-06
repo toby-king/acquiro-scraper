@@ -11,7 +11,7 @@ const BUBBLE_BASE = 'https://toby-85612.bubbleapps.io/version-test/api/1.1';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function getField(profile, ...keys) {
+export function getField(profile, ...keys) {
   for (const key of keys) {
     const v = profile[key];
     if (v == null) continue;
@@ -22,7 +22,7 @@ function getField(profile, ...keys) {
   return null;
 }
 
-function parseMoney(text) {
+export function parseMoney(text) {
   if (text == null) return null;
   const clean = String(text).toLowerCase().replace(/[£$,\s]/g, '');
   const match = clean.match(/(\d+\.?\d*)\s*(bn|m|k)?/);
@@ -35,7 +35,7 @@ function parseMoney(text) {
   return base;
 }
 
-function parseRange(text) {
+export function parseRange(text) {
   if (!text || String(text).trim() === '') return { min: 0, max: Infinity };
   const lower = text.toLowerCase();
   const tokens = [];
@@ -61,7 +61,7 @@ function parsePercent(text) {
   return match ? parseFloat(match[1]) / 100 : null;
 }
 
-function calcMaxPrice(profile) {
+export function calcMaxPrice(profile) {
   const budget = parseMoney(getField(profile, 'initial_budget', 'initial_budget_text'));
   if (budget == null) return Infinity;
   const src = (getField(profile, 'funding_source', 'funding_source_text') ?? '').toLowerCase();
@@ -71,7 +71,7 @@ function calcMaxPrice(profile) {
   return budget * multiplier;
 }
 
-function buildGoldenString(p) {
+export function buildGoldenString(p) {
   const get = (...keys) => getField(p, ...keys);
   const lines = [];
   const add = (label, ...keys) => {
@@ -160,7 +160,7 @@ const SECTOR_SYNONYMS = {
   ],
 };
 
-function expandSectorKeywords(sectors) {
+export function expandSectorKeywords(sectors) {
   const keywords = new Set();
   for (const s of sectors) {
     const normalised = s.toLowerCase().trim();
@@ -176,7 +176,7 @@ const MISSING_PENALTY   = 0.02;
 const LEEWAY            = 0.50;
 const SECTOR_BOOST      = 0.15;
 
-function scoreFinancials(meta, ebitda, turnover, maxPrice) {
+export function scoreFinancials(meta, ebitda, turnover, maxPrice) {
   let adjustment = 0;
   const breakdown = {};
 
@@ -251,7 +251,10 @@ export async function generateMatchesForUser(userId) {
   const topK = Math.min(Math.max(30, seenIds.length + 15), 100);
   const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
   const index = pinecone.index(process.env.PINECONE_INDEX_NAME);
-  const qRes = await index.query({ vector, topK, includeMetadata: true });
+  const qRes = await index.query({
+    vector, topK, includeMetadata: true,
+    filter: { source: { '$ne': 'langcliffe' } },
+  });
 
   // 6. Sector re-ranking
   const sectorKeywords = expandSectorKeywords(sectors);

@@ -27,13 +27,17 @@
  */
 
 import { createServer } from 'http';
+import busboy from 'busboy';
 import cron from 'node-cron';
 import { RightbizScraper } from './scrapers/rightbiz.js';
 import { CoGoGoScraper } from './scrapers/cogogo.js';
 import { DaltonsScraper } from './scrapers/daltons.js';
 import { BusinessesForSaleScraper } from './scrapers/businessesforsale.js';
-import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog } from './utils/bubbleClient.js';
+import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId } from './utils/bubbleClient.js';
 import { generateMatchesForUser } from './utils/matcher.js';
+import { processAndIndexListing } from './utils/indexer.js';
+import { parseLangcliffeEmail } from './utils/langcliffeParser.js';
+import { processLangcliffeListings, sendApprovedOutreach, rewriteOutreachDraft } from './utils/langcliffeResponder.js';
 import { runArchiver } from './archiver.js';
 import { runEmailNotifications, sendEmailForUser } from './utils/emailNotifier.js';
 
@@ -71,6 +75,17 @@ async function readBody(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   return JSON.parse(Buffer.concat(chunks).toString());
+}
+
+function parseMultipart(req) {
+  return new Promise((resolve, reject) => {
+    const fields = {};
+    const bb = busboy({ headers: req.headers });
+    bb.on('field', (name, val) => { fields[name] = val; });
+    bb.on('finish', () => resolve(fields));
+    bb.on('error', reject);
+    req.pipe(bb);
+  });
 }
 
 function normaliseKey(raw) {
@@ -350,6 +365,167 @@ const server = createServer(async (req, res) => {
     }
 
     return send(res, 404, { error: 'Unknown admin endpoint' });
+  }
+
+  // ── POST /webhook/inbound-email ─────────────────────────────────────────────
+  if (method === 'POST' && url === '/webhook/inbound-email') {
+    // Parse the multipart body first (data is already buffered), then ack, then process
+    let fields;
+    try {
+      fields = await parseMultipart(req);
+    } catch (err) {
+      console.error('[webhook] Failed to parse multipart body:', err.message);
+      return send(res, 200, { ok: true }); // always 200 to prevent SendGrid retries
+    }
+
+    // Acknowledge immediately — SendGrid requires a fast response
+    send(res, 200, { ok: true });
+
+    // Process asynchronously after ack
+    (async () => {
+
+      const toEmail   = (fields.to   ?? '').toLowerCase().trim();
+      const emailText = fields.text  ?? fields.html ?? '';
+
+      if (!toEmail || !emailText) {
+        console.warn('[webhook] Missing to or body in inbound email — skipping');
+        return;
+      }
+
+      console.log(`[webhook] Inbound email to: ${toEmail}`);
+
+      // Look up the agent by their email address
+      let agent;
+      try {
+        agent = await getAgentByEmail(toEmail);
+      } catch (err) {
+        console.error(`[webhook] getAgentByEmail failed: ${err.message}`);
+        return;
+      }
+
+      if (!agent) {
+        console.warn(`[webhook] No agent found for email ${toEmail} — ignoring`);
+        return;
+      }
+
+      const userId = agent.user_user;
+      if (!userId) {
+        console.warn(`[webhook] Agent found but has no user_user — ignoring`);
+        return;
+      }
+
+      // Parse the email for Langcliffe content
+      let parsed;
+      try {
+        parsed = await parseLangcliffeEmail(emailText);
+      } catch (err) {
+        console.error(`[webhook] parseLangcliffeEmail failed: ${err.message}`);
+        return;
+      }
+
+      if (!parsed) {
+        console.log('[webhook] Not a Langcliffe teaser email — nothing to do');
+        return;
+      }
+
+      const { langcliffeEmail, listings } = parsed;
+
+      // Index each listing into Bubble + Pinecone
+      const listingsWithBubbleIds = [];
+      for (const listing of listings) {
+        const listingId = `langcliffe-${listing.ref_id}`;
+        try {
+          const bubbleId = await processAndIndexListing({
+            listing_id:    listingId,
+            business_name: listing.business_name,
+            sector:        listing.sector,
+            location:      listing.location,
+            turnover:      listing.turnover,
+            ebitda:        listing.ebitda,
+            description:   listing.description,
+            source:        'langcliffe',
+            url:           null,
+          });
+          if (bubbleId) {
+            listingsWithBubbleIds.push({ bubbleId, listing });
+            console.log(`[webhook] Indexed Langcliffe listing ${listingId} → Bubble ${bubbleId}`);
+          } else {
+            // Already existed — still include it for scoring using its existing bubble ID
+            const existingId = await getBubbleIdByListingId(listingId);
+            if (existingId) listingsWithBubbleIds.push({ bubbleId: existingId, listing });
+          }
+        } catch (err) {
+          console.error(`[webhook] Failed to index listing ${listingId}: ${err.message}`);
+        }
+      }
+
+      if (listingsWithBubbleIds.length === 0) {
+        console.log('[webhook] No listings to process for outreach');
+        return;
+      }
+
+      // Score and create pending outreach drafts
+      try {
+        await processLangcliffeListings({ userId, listingsWithBubbleIds, langcliffeContact: langcliffeEmail });
+      } catch (err) {
+        console.error(`[webhook] processLangcliffeListings failed: ${err.message}`);
+      }
+    })().catch((err) => console.error('[webhook] Unhandled async error:', err.message));
+
+    return; // response already sent above
+  }
+
+  // ── Langcliffe admin endpoints (within the /admin block below) ───────────────
+
+  if (url.startsWith('/admin/langcliffe-queue')) {
+    if (!process.env.ADMIN_API_KEY) {
+      return send(res, 503, { error: 'Admin endpoints are not configured (ADMIN_API_KEY not set)' });
+    }
+    if (!checkAdminAuth(req)) {
+      return send(res, 401, { error: 'Unauthorized' });
+    }
+
+    // GET /admin/langcliffe-queue
+    if (method === 'GET' && url === '/admin/langcliffe-queue') {
+      try {
+        const queue = await getPendingOutreachQueue();
+        return send(res, 200, { count: queue.length, queue });
+      } catch (err) {
+        return send(res, 500, { error: 'Failed to fetch queue', detail: err.message });
+      }
+    }
+
+    // POST /admin/langcliffe-queue/:id/approve
+    const approveMatch = url.match(/^\/admin\/langcliffe-queue\/([^/]+)\/approve$/);
+    if (method === 'POST' && approveMatch) {
+      const outreachId = approveMatch[1];
+      try {
+        await sendApprovedOutreach(outreachId);
+        return send(res, 200, { ok: true, message: 'Outreach sent and status updated to sent' });
+      } catch (err) {
+        console.error(`[admin] approve failed for ${outreachId}: ${err.message}`);
+        return send(res, 500, { error: 'Approval failed', detail: err.message });
+      }
+    }
+
+    // POST /admin/langcliffe-queue/:id/reject
+    const rejectMatch = url.match(/^\/admin\/langcliffe-queue\/([^/]+)\/reject$/);
+    if (method === 'POST' && rejectMatch) {
+      const outreachId = rejectMatch[1];
+      let body = {};
+      try {
+        body = await readBody(req);
+      } catch { /* feedback is optional — ignore parse errors */ }
+      try {
+        const newDraft = await rewriteOutreachDraft(outreachId, body.feedback ?? null);
+        return send(res, 200, { ok: true, message: 'Draft rewritten and reset to pending', draft: newDraft });
+      } catch (err) {
+        console.error(`[admin] reject failed for ${outreachId}: ${err.message}`);
+        return send(res, 500, { error: 'Rewrite failed', detail: err.message });
+      }
+    }
+
+    return send(res, 404, { error: 'Unknown Langcliffe queue endpoint' });
   }
 
   // ── 404 fallback ────────────────────────────────────────────────────────────
