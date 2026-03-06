@@ -460,6 +460,7 @@ const server = createServer(async (req, res) => {
             sector: listing.sector, location: listing.location,
             turnover: listing.turnover, ebitda: listing.ebitda,
             description: listing.description, source: 'langcliffe',
+            url: `https://langcliffe.global/ref/${listing.ref_id}`,
           });
           if (bubbleId) {
             listingsWithBubbleIds.push({ bubbleId, listing });
@@ -572,6 +573,7 @@ const server = createServer(async (req, res) => {
             ebitda:        listing.ebitda,
             description:   listing.description,
             source:        'langcliffe',
+            url:           `https://langcliffe.global/ref/${listing.ref_id}`,
           });
           if (bubbleId) {
             listingsWithBubbleIds.push({ bubbleId, listing });
