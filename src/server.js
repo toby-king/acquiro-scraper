@@ -323,17 +323,21 @@ const server = createServer(async (req, res) => {
 
     if (method === 'POST' && url === '/admin/run-scrape') {
       console.log('[admin] Manual scrape triggered');
-      runScrape().catch((err) =>
-        console.error('[admin] Scrape failed:', err.message),
-      );
+      runScrape().then(({ totalAdded }) =>
+        createScrapeLog({ added: totalAdded, archived: 0, matches: 0 }).catch((err) =>
+          console.error('[admin] Failed to write scrape log:', err.message),
+        ),
+      ).catch((err) => console.error('[admin] Scrape failed:', err.message));
       return send(res, 202, { ok: true, message: 'Scrape started' });
     }
 
     if (method === 'POST' && url === '/admin/run-matches') {
       console.log('[admin] Manual match run triggered');
-      runMatches().catch((err) =>
-        console.error('[admin] Match run failed:', err.message),
-      );
+      runMatches().then(({ matched }) =>
+        createScrapeLog({ added: 0, archived: 0, matches: matched }).catch((err) =>
+          console.error('[admin] Failed to write scrape log:', err.message),
+        ),
+      ).catch((err) => console.error('[admin] Match run failed:', err.message));
       return send(res, 202, { ok: true, message: 'Match run started' });
     }
 
