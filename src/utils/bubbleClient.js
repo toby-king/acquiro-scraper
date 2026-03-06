@@ -14,8 +14,17 @@ export async function insertListing(listing) {
     body: JSON.stringify(listing),
   });
 
-  if (!res.ok) throw new Error(`Bubble API returned HTTP ${res.status}`);
-  return res.json();
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Bubble insert_listing returned HTTP ${res.status}: ${errText.substring(0, 200)}`);
+  }
+  const insertText = await res.text();
+  if (!insertText.trim()) throw new Error('Bubble insert_listing returned empty response body (status ' + res.status + ')');
+  try {
+    return JSON.parse(insertText);
+  } catch (e) {
+    throw new Error(`Bubble insert_listing JSON parse failed. Body: ${insertText.substring(0, 200)}`);
+  }
 }
 
 export async function checkListingExists(listing_id) {
@@ -31,9 +40,18 @@ export async function checkListingExists(listing_id) {
     headers: { Authorization: `Bearer ${apiKey}` },
   });
 
-  if (!res.ok) throw new Error(`Bubble check returned HTTP ${res.status}`);
-  const json = await res.json();
-  return (json.response?.count ?? 0) > 0;
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Bubble checkListingExists returned HTTP ${res.status}: ${errText.substring(0, 200)}`);
+  }
+  const checkText = await res.text();
+  if (!checkText.trim()) throw new Error('Bubble checkListingExists returned empty response body (status ' + res.status + ')');
+  try {
+    const json = JSON.parse(checkText);
+    return (json.response?.count ?? 0) > 0;
+  } catch (e) {
+    throw new Error(`Bubble checkListingExists JSON parse failed. Body: ${checkText.substring(0, 200)}`);
+  }
 }
 
 export async function getStaleListings(cursor = 0) {
