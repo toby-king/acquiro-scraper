@@ -152,8 +152,11 @@ export async function getBubbleIdByListingId(listing_id) {
     headers: { Authorization: `Bearer ${apiKey}` },
   });
 
-  if (!res.ok) throw new Error(`Bubble getBubbleIdByListingId returned HTTP ${res.status}`);
-  const json = await res.json();
+  const text = await res.text();
+  console.log(`[bubble] getBubbleIdByListingId status=${res.status} body="${text.substring(0, 100)}"`);
+  if (!res.ok) throw new Error(`Bubble getBubbleIdByListingId returned HTTP ${res.status}: ${text.substring(0, 200)}`);
+  if (!text.trim()) return null;
+  const json = JSON.parse(text);
   return json.response?.results?.[0]?._id ?? null;
 }
 
