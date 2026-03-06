@@ -107,12 +107,17 @@ Keep it concise — under 200 words total. Do NOT include a subject line. Plain 
 // ── Scoring ───────────────────────────────────────────────────────────────────
 
 async function scoreListing({ bubbleId, listing, buyerProfile, openai, pineconeIndex }) {
-  // Fetch the pre-computed listing vector from Pinecone
-  const fetchRes = await pineconeIndex.fetch([bubbleId]);
-  const listingVector = fetchRes.records?.[bubbleId]?.values;
+  // Try to fetch the pre-computed listing vector from Pinecone
+  let listingVector = null;
+  try {
+    const fetchRes = await pineconeIndex.fetch([bubbleId]);
+    listingVector = fetchRes.records?.[bubbleId]?.values ?? null;
+  } catch (err) {
+    console.warn(`[langcliffe] Pinecone fetch failed for ${bubbleId}: ${err.message} — falling back to re-embed`);
+  }
 
   if (!listingVector) {
-    // Ghost listing — fall back to re-embedding the listing golden string
+    // Ghost listing or fetch failed — re-embed the listing golden string
     console.warn(`[langcliffe] No Pinecone vector for ${bubbleId}, re-embedding listing`);
     const embRes = await openai.embeddings.create({
       model: 'text-embedding-3-small',
