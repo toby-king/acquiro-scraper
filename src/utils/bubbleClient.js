@@ -339,9 +339,12 @@ export async function checkOutreachExists(userId, listingId) {
   ]);
   const url = `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(constraints)}&limit=1`;
 
+  console.log(`[bubble] checkOutreachExists url=${url}`);
   const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
-  if (!res.ok) throw new Error(`Bubble checkOutreachExists returned HTTP ${res.status}`);
-  const json = await res.json();
+  const text = await res.text();
+  console.log(`[bubble] checkOutreachExists status=${res.status} body="${text.substring(0, 200)}"`);
+  if (!res.ok) throw new Error(`Bubble checkOutreachExists returned HTTP ${res.status}: ${text.substring(0, 200)}`);
+  const json = JSON.parse(text);
   return (json.response?.count ?? 0) > 0;
 }
 
