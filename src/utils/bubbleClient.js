@@ -635,12 +635,19 @@ export async function storeSignedNDA(outreachId, signedNdaFileUrl) {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
 
-  const res = await fetch(`${BUBBLE_BASE}/obj/LangcliffeOutreach/${outreachId}`, {
+  const url = `${BUBBLE_BASE}/obj/LangcliffeOutreach/${outreachId}`;
+  console.log(`[bubble] storeSignedNDA url=${url} fileUrl=${signedNdaFileUrl}`);
+
+  const res = await fetch(url, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({ signed_nda_file_text: signedNdaFileUrl, status_text: 'nda_signed' }),
   });
-  if (!res.ok) throw new Error(`Bubble storeSignedNDA returned HTTP ${res.status}`);
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Bubble storeSignedNDA returned HTTP ${res.status}: ${text}`);
+  }
 }
 
 export async function updateNDAReturnDraft(outreachId, ndaReturnDraft) {
