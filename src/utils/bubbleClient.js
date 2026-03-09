@@ -577,25 +577,23 @@ export async function getBuyerInfo(userId) {
 }
 
 export async function uploadFileToBubble(buffer, filename, mimeType) {
-  const apiKey = process.env.BUBBLE_API_KEY;
-  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+  // Bubble's /fileupload endpoint accepts JSON with a base64-encoded file.
+  // No version prefix — use the root endpoint. No auth required on this endpoint.
+  const base64 = buffer.toString('base64');
 
-  const formData = new FormData();
-  const blob = new Blob([buffer], { type: mimeType });
-  formData.append('fileupload', blob, filename);
-
-  const res = await fetch('https://toby-85612.bubbleapps.io/version-test/fileupload', {
+  const res = await fetch('https://toby-85612.bubbleapps.io/fileupload', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: formData,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: filename, contents: base64, private: false }),
   });
 
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Bubble file upload returned HTTP ${res.status}: ${text}`);
   }
+
   const text = await res.text();
-  // Bubble returns the file URL as plain text — may be protocol-relative (//host/path)
+  // Bubble returns the file URL as a protocol-relative string: //s3.amazonaws.com/...
   const url = text.trim();
   return url.startsWith('//') ? `https:${url}` : url;
 }

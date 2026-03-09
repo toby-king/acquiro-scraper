@@ -666,14 +666,16 @@ export async function handleNDAReceived({ outreach, inboundMessage, pdfBuffer, p
         buyerProfile: profile ?? {},
       });
 
+      const testRecipient = process.env.LANGCLIFFE_TEST_RECIPIENT;
+      const notifyRecipient = testRecipient || userEmail;
       await sendViaSendGrid({
         from:     agentEmail,
         fromName: agentDisplayName(agentName.replace(' @ Acquiro', '')),
-        to:       userEmail,
+        to:       notifyRecipient,
         subject:  `${agentName} — An acquisition opportunity needs your attention`,
         body:     emailBody,
       });
-      console.log(`[langcliffe] User notification email sent to ${userEmail}`);
+      console.log(`[langcliffe] User notification email sent to ${notifyRecipient}${testRecipient ? ' (test override)' : ''}`);
     } catch (err) {
       console.error(`[langcliffe] Failed to send user notification email: ${err.message}`);
     }
