@@ -593,8 +593,9 @@ export async function uploadFileToBubble(buffer, filename, mimeType) {
   }
 
   const text = await res.text();
-  // Bubble returns the file URL as a protocol-relative string: //s3.amazonaws.com/...
-  const url = text.trim();
+  // Bubble returns the URL as a JSON-quoted string: "//cdn.bubble.io/..."
+  // Strip surrounding quotes then prepend https: if protocol-relative
+  const url = text.trim().replace(/^"|"$/g, '');
   return url.startsWith('//') ? `https:${url}` : url;
 }
 
@@ -678,7 +679,7 @@ export async function createUserNotification({ userId, type, title, body, outrea
       type_text:                    type,
       title_text:                   title,
       body_text:                    body,
-      outreach_langcliffeoutreach:  outreachId,
+      langcliffe_outreach_text:  outreachId,
       status_text:                  'unread',
     }),
   });
