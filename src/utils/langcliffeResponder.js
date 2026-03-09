@@ -742,7 +742,7 @@ export async function sendApprovedNDAReturn(outreachId) {
   const outreach = await getLangcliffeOutreach(outreachId);
   if (!outreach) throw new Error(`LangcliffeOutreach record not found: ${outreachId}`);
   if (!outreach.nda_return_draft_text) throw new Error(`No NDA return draft on outreach: ${outreachId}`);
-  if (!outreach.signed_nda_file_file) throw new Error(`No signed NDA file on outreach: ${outreachId}`);
+  if (!outreach.signed_nda_file_text) throw new Error(`No signed NDA file on outreach: ${outreachId}`);
 
   const userId = outreach.user_user;
   const agent  = await getAgentForUser(userId);
@@ -758,7 +758,7 @@ export async function sendApprovedNDAReturn(outreachId) {
   const recipient     = testRecipient || outreach.langcliffe_contact_text;
 
   // Download signed NDA from Bubble and base64-encode it
-  const fileRes = await fetch(outreach.signed_nda_file_file);
+  const fileRes = await fetch(outreach.signed_nda_file_text);
   if (!fileRes.ok) throw new Error(`Failed to download signed NDA: ${fileRes.status}`);
   const fileBuffer = Buffer.from(await fileRes.arrayBuffer());
   const base64File = fileBuffer.toString('base64');

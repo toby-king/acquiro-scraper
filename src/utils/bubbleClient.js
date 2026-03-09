@@ -608,7 +608,7 @@ export async function updateOutreachNDA({ outreachId, ndaFileUrl, replyBody, ack
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
-      nda_file_file:             ndaFileUrl,
+      nda_file_text:             ndaFileUrl,
       langcliffe_reply_body_text: replyBody,
       acknowledgment_draft_text:  ackDraft,
       status_text:               'nda_received',
@@ -639,7 +639,7 @@ export async function storeSignedNDA(outreachId, signedNdaFileUrl) {
   const res = await fetch(`${BUBBLE_BASE}/obj/LangcliffeOutreach/${outreachId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ signed_nda_file_file: signedNdaFileUrl, status_text: 'nda_signed' }),
+    body: JSON.stringify({ signed_nda_file_text: signedNdaFileUrl, status_text: 'nda_signed' }),
   });
   if (!res.ok) throw new Error(`Bubble storeSignedNDA returned HTTP ${res.status}`);
 }
