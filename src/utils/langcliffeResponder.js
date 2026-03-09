@@ -291,16 +291,19 @@ export async function sendApprovedOutreach(outreachId) {
   const ref = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
   const subject = `Acquisition enquiry — Ref ${ref}: ${outreach.business_name_text ?? 'Business opportunity'}`;
 
+  const testRecipient = process.env.LANGCLIFFE_TEST_RECIPIENT;
+  const recipient = testRecipient || outreach.langcliffe_contact_text;
+
   await sendViaSendGrid({
     from:     fromEmail,
     fromName,
-    to:       outreach.langcliffe_contact_text,
+    to:       recipient,
     subject,
     body:    outreach.draft_body_text,
   });
 
   await approveOutreach(outreachId);
-  console.log(`[langcliffe] Outreach sent for ${outreach.listing_id_text} → ${outreach.langcliffe_contact_text}`);
+  console.log(`[langcliffe] Outreach sent for ${outreach.listing_id_text} → ${recipient}${testRecipient ? ' (test override)' : ''}`);
 }
 
 /**
