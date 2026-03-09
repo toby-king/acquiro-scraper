@@ -513,7 +513,8 @@ const server = createServer(async (req, res) => {
     // Process asynchronously after ack
     (async () => {
 
-      const toEmail   = (fields.to   ?? '').toLowerCase().trim();
+      const rawTo     = (fields.to ?? '').trim();
+      const toEmail   = (rawTo.match(/<([^>]+)>/) ? rawTo.match(/<([^>]+)>/)[1] : rawTo).toLowerCase().trim();
       const emailText = fields.text  ?? fields.html ?? '';
 
       if (!toEmail || !emailText) {
