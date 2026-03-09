@@ -706,6 +706,38 @@ export async function createUserNotification({ userId, type, title, body, outrea
   }
 }
 
+export async function getExistingUserNotification(userId, outreachId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'user_user',                constraint_type: 'equals', value: userId },
+    { key: 'langcliffe_outreach_text', constraint_type: 'equals', value: outreachId },
+    { key: 'status_text',              constraint_type: 'equals', value: 'unread' },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/UserNotification?constraints=${encodeURIComponent(constraints)}&limit=1`;
+
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getExistingUserNotification returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response?.results?.[0] ?? null;
+}
+
+export async function updateUserNotification(notificationId, { title, body }) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/UserNotification/${notificationId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ title_text: title, body_text: body }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Bubble updateUserNotification returned HTTP ${res.status}: ${text}`);
+  }
+}
+
 export async function getUserNotifications(userId) {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');

@@ -18,6 +18,8 @@ import {
   updateNDAReturnDraft,
   approveNDAReturn,
   createUserNotification,
+  getExistingUserNotification,
+  updateUserNotification,
   uploadFileToBubble,
 } from './bubbleClient.js';
 import {
@@ -528,7 +530,7 @@ Context:
 
 // ── NDA handling ──────────────────────────────────────────────────────────────
 
-async function generateAcknowledgmentBody({ outreach, agentName, agentEmail }) {
+async function generateAcknowledgmentBody({ outreach, agentName, agentEmail, isReplacement = false, replacementContext = '' }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const contactFirstName = outreach.langcliffe_contact_text
@@ -537,14 +539,22 @@ async function generateAcknowledgmentBody({ outreach, agentName, agentEmail }) {
     ?? 'there';
   const ref = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
 
+  const replacementNote = isReplacement && replacementContext
+    ? `\n\nContext: The broker is sending a replacement/updated NDA. Their message explaining why:\n"${replacementContext.trim().substring(0, 400)}"`
+    : '';
+
+  const contentInstruction = isReplacement
+    ? `Content: Acknowledge receipt of the updated/replacement NDA. Reference that they mentioned sending a new version and confirm you have received it. Confirm you will review it with the client and revert shortly. Express continued interest. Professional sign-off.`
+    : `Content: Thank them for sending the NDA. Confirm you will review it with the client and revert shortly. Express continued interest. Professional sign-off.`;
+
   const prompt = `Write a short, professional acknowledgment email to a business broker confirming receipt of an NDA.
 
 Broker first name: ${contactFirstName}
 Business opportunity reference: ${ref}
 Business name: ${outreach.business_name_text ?? 'the business'}
-Agent signing off: ${agentName} | ${agentEmail}
+Agent signing off: ${agentName} | ${agentEmail}${replacementNote}
 
-Content: Thank them for sending the NDA. Confirm you will review it with the client and revert shortly. Express continued interest. Professional sign-off.
+${contentInstruction}
 
 Under 100 words. Plain text only. No subject line.`;
 
@@ -644,8 +654,17 @@ export async function handleNDAReceived({ outreach, inboundMessage, pdfBuffer, p
   // Upload NDA PDF to Bubble
   const ndaFileUrl = await uploadFileToBubble(pdfBuffer, pdfFilename, 'application/pdf');
 
+  // Detect replacement: if an NDA file is already stored on this outreach, this is a second send
+  const isReplacement = !!outreach.nda_file_text;
+
   // Generate acknowledgment draft
-  const ackDraft = await generateAcknowledgmentBody({ outreach, agentName, agentEmail });
+  const ackDraft = await generateAcknowledgmentBody({
+    outreach,
+    agentName,
+    agentEmail,
+    isReplacement,
+    replacementContext: isReplacement ? inboundMessage : '',
+  });
 
   // Update outreach record
   await updateOutreachNDA({ outreachId: outreach._id, ndaFileUrl, replyBody: inboundMessage, ackDraft });
@@ -683,18 +702,32 @@ export async function handleNDAReceived({ outreach, inboundMessage, pdfBuffer, p
     }
   }
 
-  // Create UserNotification record in Bubble for dashboard banner
+  // Create or update UserNotification record in Bubble for dashboard banner
   try {
-    await createUserNotification({
-      userId,
-      type:       'nda_required',
-      title:      `NDA required — ${outreach.business_name_text ?? 'Acquisition opportunity'}`,
-      body:       `An NDA has been sent for ${outreach.business_name_text ?? 'a business opportunity'} (Ref ${listingRef}). Download, sign, and upload it from your dashboard to receive the full Information Memorandum.`,
-      outreachId: outreach._id,
-    });
-    console.log(`[langcliffe] UserNotification record created for user ${userId}`);
+    const existingNotification = await getExistingUserNotification(userId, outreach._id);
+
+    if (existingNotification) {
+      // Replacement NDA — update the existing notification rather than creating a duplicate
+      const brokerNote = inboundMessage?.trim()
+        ? `The broker's note: "${inboundMessage.trim().substring(0, 200)}${inboundMessage.trim().length > 200 ? '…' : ''}"`
+        : 'The broker has sent a replacement file.';
+      await updateUserNotification(existingNotification._id, {
+        title: `Updated NDA — ${outreach.business_name_text ?? 'Acquisition opportunity'}`,
+        body:  `A replacement NDA has been received for ${outreach.business_name_text ?? 'a business opportunity'} (Ref ${listingRef}). The previous file has been replaced. ${brokerNote} Please download, sign, and upload the updated file from your dashboard.`,
+      });
+      console.log(`[langcliffe] UserNotification ${existingNotification._id} updated with replacement NDA for user ${userId}`);
+    } else {
+      await createUserNotification({
+        userId,
+        type:       'nda_required',
+        title:      `NDA required — ${outreach.business_name_text ?? 'Acquisition opportunity'}`,
+        body:       `An NDA has been sent for ${outreach.business_name_text ?? 'a business opportunity'} (Ref ${listingRef}). Download, sign, and upload it from your dashboard to receive the full Information Memorandum.`,
+        outreachId: outreach._id,
+      });
+      console.log(`[langcliffe] UserNotification record created for user ${userId}`);
+    }
   } catch (err) {
-    console.error(`[langcliffe] Failed to create UserNotification: ${err.message}`);
+    console.error(`[langcliffe] Failed to create/update UserNotification: ${err.message}`);
   }
 }
 
