@@ -462,7 +462,7 @@ export async function rejectOutreach(outreachId, newDraftBody) {
 }
 
 // Active statuses — any outreach that is part of an ongoing conversation
-const ACTIVE_STATUSES = ['sent', 'pending_reply', 'nda_received', 'nda_acknowledged'];
+const ACTIVE_STATUSES = ['sent', 'pending_reply', 'nda_received', 'nda_acknowledged', 'nda_signed', 'nda_returned'];
 
 export async function getMostRecentSentOutreach(userId) {
   const apiKey = process.env.BUBBLE_API_KEY;
