@@ -765,3 +765,18 @@ export async function markNotificationActioned(notificationId) {
   });
   if (!res.ok) throw new Error(`Bubble markNotificationActioned returned HTTP ${res.status}`);
 }
+
+export async function setUserLangcliffeConnected(userId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/User/${userId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ langcliffe_connected_boolean: true }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Bubble setUserLangcliffeConnected returned HTTP ${res.status}: ${text}`);
+  }
+}

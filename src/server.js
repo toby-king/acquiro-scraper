@@ -33,7 +33,7 @@ import { RightbizScraper } from './scrapers/rightbiz.js';
 import { CoGoGoScraper } from './scrapers/cogogo.js';
 import { DaltonsScraper } from './scrapers/daltons.js';
 import { BusinessesForSaleScraper } from './scrapers/businessesforsale.js';
-import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId, deleteOutreach, getOutreachByContact, getMostRecentSentOutreach, uploadFileToBubble, updateOutreachNDA, createUserNotification, storeSignedNDA, getLangcliffeOutreach } from './utils/bubbleClient.js';
+import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId, deleteOutreach, getOutreachByContact, getMostRecentSentOutreach, uploadFileToBubble, updateOutreachNDA, createUserNotification, storeSignedNDA, getLangcliffeOutreach, setUserLangcliffeConnected } from './utils/bubbleClient.js';
 import { generateMatchesForUser } from './utils/matcher.js';
 import { processAndIndexListing } from './utils/indexer.js';
 import { parseLangcliffeEmail } from './utils/langcliffeParser.js';
@@ -564,6 +564,8 @@ const server = createServer(async (req, res) => {
           result.outreach = listingsWithBubbleIds.map(({ listing }) => ({
             listingId: `langcliffe_${listing.ref_id}`, status: 'draft_created_or_skipped',
           }));
+          // Auto-mark the user as Langcliffe-connected on first successful processing
+          setUserLangcliffeConnected(userId).catch((err) => console.warn(`[inbound] setUserLangcliffeConnected failed: ${err.message}`));
         } catch (err) {
           result.outreach = [{ status: 'error', error: err.message }];
         }
@@ -728,6 +730,8 @@ const server = createServer(async (req, res) => {
       // Score and create pending outreach drafts
       try {
         await processLangcliffeListings({ userId, listingsWithBubbleIds, langcliffeContact: langcliffeEmail, inboundEmail: emailText });
+        // Auto-mark the user as Langcliffe-connected on first successful processing
+        setUserLangcliffeConnected(userId).catch((err) => console.warn(`[webhook] setUserLangcliffeConnected failed: ${err.message}`));
       } catch (err) {
         console.error(`[webhook] processLangcliffeListings failed: ${err.message}`);
       }
