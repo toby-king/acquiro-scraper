@@ -481,7 +481,7 @@ const server = createServer(async (req, res) => {
 
       if (listingsWithBubbleIds.length > 0) {
         try {
-          await processLangcliffeListings({ userId, listingsWithBubbleIds, langcliffeContact: parsed.langcliffeEmail });
+          await processLangcliffeListings({ userId, listingsWithBubbleIds, langcliffeContact: parsed.langcliffeEmail, inboundEmail: emailText });
           result.outreach = listingsWithBubbleIds.map(({ listing }) => ({
             listingId: `langcliffe_${listing.ref_id}`, status: 'draft_created_or_skipped',
           }));
@@ -595,7 +595,7 @@ const server = createServer(async (req, res) => {
 
       // Score and create pending outreach drafts
       try {
-        await processLangcliffeListings({ userId, listingsWithBubbleIds, langcliffeContact: langcliffeEmail });
+        await processLangcliffeListings({ userId, listingsWithBubbleIds, langcliffeContact: langcliffeEmail, inboundEmail: emailText });
       } catch (err) {
         console.error(`[webhook] processLangcliffeListings failed: ${err.message}`);
       }

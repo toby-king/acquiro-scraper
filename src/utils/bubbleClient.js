@@ -351,7 +351,7 @@ export async function checkOutreachExists(userId, listingId) {
   return (json.response?.count ?? 0) > 0;
 }
 
-export async function createOutreachDraft({ userId, listingId, langcliffeContact, businessName, draftBody }) {
+export async function createOutreachDraft({ userId, listingId, langcliffeContact, businessName, draftBody, inboundEmail = '' }) {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
 
@@ -367,6 +367,7 @@ export async function createOutreachDraft({ userId, listingId, langcliffeContact
       langcliffe_contact_text: langcliffeContact,
       business_name_text: businessName,
       draft_body_text: draftBody,
+      inbound_email_text: inboundEmail,
       status_text: 'pending',
     }),
   });

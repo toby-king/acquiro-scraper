@@ -155,7 +155,7 @@ async function scoreListing({ bubbleId, listing, buyerProfile, openai, pineconeI
  *
  * @param {{ userId: string, listingsWithBubbleIds: Array<{ bubbleId: string, listing: object }>, langcliffeContact: string }}
  */
-export async function processLangcliffeListings({ userId, listingsWithBubbleIds, langcliffeContact }) {
+export async function processLangcliffeListings({ userId, listingsWithBubbleIds, langcliffeContact, inboundEmail = '' }) {
   // 1. Fetch buyer profile and agent
   const profileRes = await getBuyerInfo(userId);
   if (!profileRes || profileRes.count === 0) {
@@ -262,6 +262,7 @@ export async function processLangcliffeListings({ userId, listingsWithBubbleIds,
         langcliffeContact,
         businessName: listing.business_name ?? listingId,
         draftBody,
+        inboundEmail,
       });
       console.log(`[langcliffe] Outreach draft created (id=${outreachId}) for listing ${listingId} — awaiting admin approval`);
     } catch (err) {
