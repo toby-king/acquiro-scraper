@@ -648,10 +648,20 @@ const server = createServer(async (req, res) => {
           }
 
           if (!outreach) {
-            // Test mode fallback: if from is the test recipient, use the most recent sent outreach
+            // Fallback: check if sender matches the user's configured Langcliffe contact email,
+            // or is the configured test recipient — handles different staff replying vs. the teaser sender
+            let configuredContactEmail = null;
+            try {
+              const buyerInfoRes = await getBuyerInfo(userId);
+              configuredContactEmail = buyerInfoRes?.results?.[0]?.langcliffe_contact_email_text?.toLowerCase().trim() ?? null;
+            } catch {
+              // non-fatal — proceed without it
+            }
             const testRecipient = process.env.LANGCLIFFE_TEST_RECIPIENT?.toLowerCase().trim();
-            if (testRecipient && fromEmail === testRecipient) {
-              console.log(`[webhook] Test mode: looking up most recent sent outreach for user ${userId}`);
+            const isConfiguredContact = configuredContactEmail && fromEmail === configuredContactEmail;
+            const isTestSender = testRecipient && fromEmail === testRecipient;
+            if (isConfiguredContact || isTestSender) {
+              console.log(`[webhook] Contact email not matched exactly — falling back to most recent outreach for user ${userId} (from: ${fromEmail})`);
               try {
                 outreach = await getMostRecentSentOutreach(userId);
               } catch (err) {
