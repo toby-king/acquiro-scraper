@@ -197,11 +197,14 @@ export async function createScrapeLog({ added, archived, matches }) {
       last_run: new Date().toISOString(),
       records_added: added,
       records_archived: archived,
-      matches_made: matches,
+      matched_made: matches,
     }),
   });
 
-  if (!res.ok) throw new Error(`Bubble createScrapeLog returned HTTP ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Bubble createScrapeLog returned HTTP ${res.status}: ${body}`);
+  }
   return res.json();
 }
 
