@@ -11,6 +11,13 @@ import {
   updateOutreachReply,
   approveReply,
   updateReplyDraft,
+  updateOutreachNDA,
+  approveAcknowledgment,
+  storeSignedNDA,
+  updateNDAReturnDraft,
+  approveNDAReturn,
+  createUserNotification,
+  uploadFileToBubble,
 } from './bubbleClient.js';
 import {
   buildGoldenString,
@@ -516,4 +523,272 @@ Context:
   await rejectOutreach(outreachId, newDraftBody);
   console.log(`[langcliffe] Outreach draft rewritten for ${outreach.listing_id_text}`);
   return newDraftBody;
+}
+
+// ── NDA handling ──────────────────────────────────────────────────────────────
+
+async function generateAcknowledgmentBody({ outreach, agentName, agentEmail }) {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+  const contactFirstName = outreach.langcliffe_contact_text
+    ?.match(/<([^>]+)>/)?.[1]?.split('@')[0]?.replace(/[._-]/g, ' ')
+    ?? outreach.langcliffe_contact_text?.split('@')[0]?.replace(/[._-]/g, ' ')
+    ?? 'there';
+  const ref = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
+
+  const prompt = `Write a short, professional acknowledgment email to a business broker confirming receipt of an NDA.
+
+Broker first name: ${contactFirstName}
+Business opportunity reference: ${ref}
+Business name: ${outreach.business_name_text ?? 'the business'}
+Agent signing off: ${agentName} | ${agentEmail}
+
+Content: Thank them for sending the NDA. Confirm you will review it with the client and revert shortly. Express continued interest. Professional sign-off.
+
+Under 100 words. Plain text only. No subject line.`;
+
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.4,
+  });
+
+  return completion.choices[0].message.content.trim();
+}
+
+async function generateNDAReturnBody({ outreach, agentName, agentEmail }) {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+  const contactFirstName = outreach.langcliffe_contact_text
+    ?.match(/<([^>]+)>/)?.[1]?.split('@')[0]?.replace(/[._-]/g, ' ')
+    ?? outreach.langcliffe_contact_text?.split('@')[0]?.replace(/[._-]/g, ' ')
+    ?? 'there';
+  const ref = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
+
+  const prompt = `Write a short, professional email returning a signed NDA to a business broker.
+
+Broker first name: ${contactFirstName}
+Business opportunity reference: ${ref}
+Business name: ${outreach.business_name_text ?? 'the business'}
+Agent signing off: ${agentName} | ${agentEmail}
+
+Content: Confirm the signed NDA is attached. Express that you look forward to reviewing the Information Memorandum. Professional sign-off.
+
+Under 80 words. Plain text only. No subject line.`;
+
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.4,
+  });
+
+  return completion.choices[0].message.content.trim();
+}
+
+/**
+ * Called when a Langcliffe reply has a PDF attachment — treat as NDA.
+ * Uploads the PDF to Bubble, generates acknowledgment draft, notifies user.
+ */
+async function generateUserNDAEmail({ outreach, inboundMessage, agentName, agentEmail, buyerProfile }) {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+  const listingRef        = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
+  const businessName      = outreach.business_name_text ?? 'a business opportunity';
+  const originalTeaser    = outreach.inbound_email_text ?? '';
+  const conversationSoFar = outreach.conversation_history_text ?? '';
+  const brokerReply       = outreach.langcliffe_reply_body_text ?? '';
+  const companyOverview   = getField(buyerProfile, 'company_overview_text') ?? '';
+
+  // Build a context block from whatever we know about the business
+  const contextParts = [];
+  if (originalTeaser) contextParts.push(`Original broker teaser:\n${originalTeaser}`);
+  if (brokerReply)    contextParts.push(`Broker's reply to our initial outreach:\n${brokerReply}`);
+  if (conversationSoFar) contextParts.push(`Conversation history:\n${conversationSoFar}`);
+  if (inboundMessage) contextParts.push(`Email accompanying the NDA:\n${inboundMessage}`);
+  const contextBlock = contextParts.join('\n\n---\n\n');
+
+  const prompt = `You are ${agentName}, an AI acquisition advisor at Acquiro. You have been quietly working on behalf of a client — they set up their acquisition criteria and trusted you to act on their behalf. They don't yet know about this specific opportunity.
+
+You need to write them an email that:
+1. Introduces yourself and briefly reminds them that you've been working on their behalf (they set their criteria and you've been actively pursuing matches for them)
+2. Introduces this specific business opportunity — ${businessName} (Ref ${listingRef}) — with a concise but compelling summary of what it is and why it's relevant to their acquisition goals
+3. Summarises what's happened so far: you identified the opportunity, reached out to the broker (Langcliffe International), and they've responded positively
+4. Shares any useful information learned through the conversation with the broker (beyond the initial listing) — but don't overwhelm them
+5. Explains clearly that to move forward and receive the full Information Memorandum (IM), they need to sign an NDA — and that it's ready and waiting for them on their Acquiro dashboard
+6. Ends with a warm, confident sign-off as their advisor
+
+Tone: warm but professional. Like a trusted advisor giving an exciting update. Concise — under 250 words. Plain text only, no markdown. No subject line.
+
+Their acquisition focus: ${companyOverview || 'UK business acquisitions'}
+
+All context from the broker interaction:
+${contextBlock || '(No prior conversation — this is the first response from the broker)'}
+
+Sign off as: ${agentName} | ${agentEmail}`;
+
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.5,
+  });
+
+  return completion.choices[0].message.content.trim();
+}
+
+export async function handleNDAReceived({ outreach, inboundMessage, pdfBuffer, pdfFilename, userId }) {
+  const agent      = await getAgentForUser(userId);
+  const agentName  = agent?.name_text ?? agent?.name ?? 'Your Agent';
+  const agentEmail = agent?.email_text ?? 'agent@acquiro.ai';
+
+  // Upload NDA PDF to Bubble
+  const ndaFileUrl = await uploadFileToBubble(pdfBuffer, pdfFilename, 'application/pdf');
+
+  // Generate acknowledgment draft
+  const ackDraft = await generateAcknowledgmentBody({ outreach, agentName, agentEmail });
+
+  // Update outreach record
+  await updateOutreachNDA({ outreachId: outreach._id, ndaFileUrl, replyBody: inboundMessage, ackDraft });
+  console.log(`[langcliffe] NDA received for outreach ${outreach._id} — acknowledgment queued`);
+
+  // Auto-send user notification email (no admin approval needed — going to user not broker)
+  const profileRes  = await getBuyerInfo(userId);
+  const profile     = profileRes?.results?.[0];
+  const userEmail   = profile?.email ?? null;
+  const listingRef  = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
+
+  if (userEmail) {
+    try {
+      const emailBody = await generateUserNDAEmail({
+        outreach,
+        inboundMessage,
+        agentName,
+        agentEmail,
+        buyerProfile: profile ?? {},
+      });
+
+      await sendViaSendGrid({
+        from:     agentEmail,
+        fromName: agentDisplayName(agentName.replace(' @ Acquiro', '')),
+        to:       userEmail,
+        subject:  `${agentName} — An acquisition opportunity needs your attention`,
+        body:     emailBody,
+      });
+      console.log(`[langcliffe] User notification email sent to ${userEmail}`);
+    } catch (err) {
+      console.error(`[langcliffe] Failed to send user notification email: ${err.message}`);
+    }
+  }
+
+  // Create UserNotification record in Bubble for dashboard banner
+  try {
+    await createUserNotification({
+      userId,
+      type:       'nda_required',
+      title:      `NDA required — ${outreach.business_name_text ?? 'Acquisition opportunity'}`,
+      body:       `An NDA has been sent for ${outreach.business_name_text ?? 'a business opportunity'} (Ref ${listingRef}). Download, sign, and upload it from your dashboard to receive the full Information Memorandum.`,
+      outreachId: outreach._id,
+    });
+    console.log(`[langcliffe] UserNotification record created for user ${userId}`);
+  } catch (err) {
+    console.error(`[langcliffe] Failed to create UserNotification: ${err.message}`);
+  }
+}
+
+/**
+ * Send the acknowledgment email to Langcliffe. Admin-approved.
+ */
+export async function sendApprovedAcknowledgment(outreachId) {
+  const outreach = await getLangcliffeOutreach(outreachId);
+  if (!outreach) throw new Error(`LangcliffeOutreach record not found: ${outreachId}`);
+  if (!outreach.acknowledgment_draft_text) throw new Error(`No acknowledgment draft on outreach: ${outreachId}`);
+
+  const userId = outreach.user_user;
+  const agent  = await getAgentForUser(userId);
+
+  const rawName   = agent?.name_text ?? agent?.name ?? 'agent';
+  const fromEmail = `${sanitiseAgentName(rawName)}@acquiro-agent.com`;
+  const fromName  = agentDisplayName(rawName);
+
+  const ref     = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
+  const subject = `RE: Acquisition enquiry — Ref ${ref}: ${outreach.business_name_text ?? 'Business opportunity'}`;
+
+  const testRecipient = process.env.LANGCLIFFE_TEST_RECIPIENT;
+  const recipient     = testRecipient || outreach.langcliffe_contact_text;
+
+  await sendViaSendGrid({ from: fromEmail, fromName, to: recipient, subject, body: outreach.acknowledgment_draft_text });
+  await approveAcknowledgment(outreachId);
+  console.log(`[langcliffe] Acknowledgment sent for ${outreach.listing_id_text} → ${recipient}${testRecipient ? ' (test override)' : ''}`);
+}
+
+/**
+ * Generate and queue an NDA return draft after user uploads signed NDA.
+ */
+export async function generateAndQueueNDAReturn(outreach) {
+  const userId = outreach.user_user;
+  const agent  = await getAgentForUser(userId);
+
+  const agentName  = agent?.name_text ?? agent?.name ?? 'Your Agent';
+  const agentEmail = agent?.email_text ?? 'agent@acquiro.ai';
+
+  const ndaReturnDraft = await generateNDAReturnBody({ outreach, agentName, agentEmail });
+  await updateNDAReturnDraft(outreach._id, ndaReturnDraft);
+  console.log(`[langcliffe] NDA return draft generated for outreach ${outreach._id}`);
+}
+
+/**
+ * Send the NDA return email with signed PDF attached. Admin-approved.
+ */
+export async function sendApprovedNDAReturn(outreachId) {
+  const outreach = await getLangcliffeOutreach(outreachId);
+  if (!outreach) throw new Error(`LangcliffeOutreach record not found: ${outreachId}`);
+  if (!outreach.nda_return_draft_text) throw new Error(`No NDA return draft on outreach: ${outreachId}`);
+  if (!outreach.signed_nda_file_file) throw new Error(`No signed NDA file on outreach: ${outreachId}`);
+
+  const userId = outreach.user_user;
+  const agent  = await getAgentForUser(userId);
+
+  const rawName   = agent?.name_text ?? agent?.name ?? 'agent';
+  const fromEmail = `${sanitiseAgentName(rawName)}@acquiro-agent.com`;
+  const fromName  = agentDisplayName(rawName);
+
+  const ref     = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
+  const subject = `RE: Acquisition enquiry — Ref ${ref}: ${outreach.business_name_text ?? 'Business opportunity'}`;
+
+  const testRecipient = process.env.LANGCLIFFE_TEST_RECIPIENT;
+  const recipient     = testRecipient || outreach.langcliffe_contact_text;
+
+  // Download signed NDA from Bubble and base64-encode it
+  const fileRes = await fetch(outreach.signed_nda_file_file);
+  if (!fileRes.ok) throw new Error(`Failed to download signed NDA: ${fileRes.status}`);
+  const fileBuffer = Buffer.from(await fileRes.arrayBuffer());
+  const base64File = fileBuffer.toString('base64');
+
+  // Send via SendGrid with attachment
+  const apiKey = process.env.SENDGRID_API_KEY;
+  if (!apiKey) throw new Error('SENDGRID_API_KEY env var is not set');
+
+  const sgRes = await fetch('https://api.sendgrid.com/v3/mail/send', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      personalizations: [{ to: [{ email: recipient }] }],
+      from:    { email: fromEmail, name: fromName },
+      subject,
+      content: [{ type: 'text/plain', value: outreach.nda_return_draft_text }],
+      attachments: [{
+        content:     base64File,
+        filename:    'signed-nda.pdf',
+        type:        'application/pdf',
+        disposition: 'attachment',
+      }],
+    }),
+  });
+
+  if (!sgRes.ok) {
+    const text = await sgRes.text();
+    throw new Error(`SendGrid returned HTTP ${sgRes.status}: ${text}`);
+  }
+
+  await approveNDAReturn(outreachId);
+  console.log(`[langcliffe] NDA return sent for ${outreach.listing_id_text} → ${recipient}${testRecipient ? ' (test override)' : ''}`);
 }

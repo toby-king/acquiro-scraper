@@ -33,11 +33,11 @@ import { RightbizScraper } from './scrapers/rightbiz.js';
 import { CoGoGoScraper } from './scrapers/cogogo.js';
 import { DaltonsScraper } from './scrapers/daltons.js';
 import { BusinessesForSaleScraper } from './scrapers/businessesforsale.js';
-import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId, deleteOutreach, getOutreachByContact, getMostRecentSentOutreach } from './utils/bubbleClient.js';
+import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId, deleteOutreach, getOutreachByContact, getMostRecentSentOutreach, uploadFileToBubble, updateOutreachNDA, createUserNotification, storeSignedNDA, getLangcliffeOutreach } from './utils/bubbleClient.js';
 import { generateMatchesForUser } from './utils/matcher.js';
 import { processAndIndexListing } from './utils/indexer.js';
 import { parseLangcliffeEmail } from './utils/langcliffeParser.js';
-import { processLangcliffeListings, sendApprovedOutreach, rewriteOutreachDraft, handleLangcliffeReply, sendApprovedReply, rewriteReplyDraft } from './utils/langcliffeResponder.js';
+import { processLangcliffeListings, sendApprovedOutreach, rewriteOutreachDraft, handleLangcliffeReply, sendApprovedReply, rewriteReplyDraft, handleNDAReceived, sendApprovedAcknowledgment, sendApprovedNDAReturn, generateAndQueueNDAReturn } from './utils/langcliffeResponder.js';
 import { runArchiver } from './archiver.js';
 import { runEmailNotifications, sendEmailForUser } from './utils/emailNotifier.js';
 
@@ -80,9 +80,21 @@ async function readBody(req) {
 function parseMultipart(req) {
   return new Promise((resolve, reject) => {
     const fields = {};
+    const files  = {};
     const bb = busboy({ headers: req.headers });
     bb.on('field', (name, val) => { fields[name] = val; });
-    bb.on('finish', () => resolve(fields));
+    bb.on('file', (name, stream, info) => {
+      const chunks = [];
+      stream.on('data', (chunk) => chunks.push(chunk));
+      stream.on('end', () => {
+        files[name] = {
+          buffer:   Buffer.concat(chunks),
+          filename: info.filename ?? 'attachment',
+          mimeType: info.mimeType ?? 'application/octet-stream',
+        };
+      });
+    });
+    bb.on('finish', () => resolve({ fields, files }));
     bb.on('error', reject);
     req.pipe(bb);
   });
@@ -451,6 +463,32 @@ const server = createServer(async (req, res) => {
         }
       }
 
+      // POST /admin/langcliffe-queue/:id/approve-ack
+      const approveAckMatch = url.match(/^\/admin\/langcliffe-queue\/([^/]+)\/approve-ack$/);
+      if (method === 'POST' && approveAckMatch) {
+        const outreachId = approveAckMatch[1];
+        try {
+          await sendApprovedAcknowledgment(outreachId);
+          return send(res, 200, { ok: true, message: 'Acknowledgment sent' });
+        } catch (err) {
+          console.error(`[admin] approve-ack failed for ${outreachId}: ${err.message}`);
+          return send(res, 500, { error: 'Acknowledgment send failed', detail: err.message });
+        }
+      }
+
+      // POST /admin/langcliffe-queue/:id/approve-nda-return
+      const approveNDAReturnMatch = url.match(/^\/admin\/langcliffe-queue\/([^/]+)\/approve-nda-return$/);
+      if (method === 'POST' && approveNDAReturnMatch) {
+        const outreachId = approveNDAReturnMatch[1];
+        try {
+          await sendApprovedNDAReturn(outreachId);
+          return send(res, 200, { ok: true, message: 'NDA return sent' });
+        } catch (err) {
+          console.error(`[admin] approve-nda-return failed for ${outreachId}: ${err.message}`);
+          return send(res, 500, { error: 'NDA return failed', detail: err.message });
+        }
+      }
+
       return send(res, 404, { error: 'Unknown Langcliffe queue endpoint' });
     }
 
@@ -540,9 +578,9 @@ const server = createServer(async (req, res) => {
   // ── POST /webhook/inbound-email ─────────────────────────────────────────────
   if (method === 'POST' && url === '/webhook/inbound-email') {
     // Parse the multipart body first (data is already buffered), then ack, then process
-    let fields;
+    let fields, files;
     try {
-      fields = await parseMultipart(req);
+      ({ fields, files } = await parseMultipart(req));
     } catch (err) {
       console.error('[webhook] Failed to parse multipart body:', err.message);
       return send(res, 200, { ok: true }); // always 200 to prevent SendGrid retries
@@ -626,10 +664,24 @@ const server = createServer(async (req, res) => {
             return;
           }
 
-          try {
-            await handleLangcliffeReply({ outreach, inboundMessage: emailText, userId });
-          } catch (err) {
-            console.error(`[webhook] handleLangcliffeReply failed: ${err.message}`);
+          // Check if there's a PDF attachment — if so, treat as NDA
+          const attachmentEntry = Object.values(files).find(
+            (f) => f.mimeType === 'application/pdf' || f.filename?.toLowerCase().endsWith('.pdf'),
+          );
+
+          if (attachmentEntry) {
+            console.log(`[webhook] PDF attachment detected — treating as NDA for outreach ${outreach._id}`);
+            try {
+              await handleNDAReceived({ outreach, inboundMessage: emailText, pdfBuffer: attachmentEntry.buffer, pdfFilename: attachmentEntry.filename, userId });
+            } catch (err) {
+              console.error(`[webhook] handleNDAReceived failed: ${err.message}`);
+            }
+          } else {
+            try {
+              await handleLangcliffeReply({ outreach, inboundMessage: emailText, userId });
+            } catch (err) {
+              console.error(`[webhook] handleLangcliffeReply failed: ${err.message}`);
+            }
           }
         } else {
           console.log('[webhook] Not a Langcliffe teaser and no from address — nothing to do');
@@ -682,6 +734,35 @@ const server = createServer(async (req, res) => {
     })().catch((err) => console.error('[webhook] Unhandled async error:', err.message));
 
     return; // response already sent above
+  }
+
+  // ── POST /user/outreach/:id/signed-nda ──────────────────────────────────────
+  const signedNDAMatch = url.match(/^\/user\/outreach\/([^/]+)\/signed-nda$/);
+  if (method === 'POST' && signedNDAMatch) {
+    const outreachId = signedNDAMatch[1];
+    let parsedBody;
+    try {
+      parsedBody = await parseMultipart(req);
+    } catch (err) {
+      return send(res, 400, { error: 'Failed to parse upload' });
+    }
+    const { files: uploadedFiles } = parsedBody;
+    const fileEntry = Object.values(uploadedFiles)[0];
+    if (!fileEntry) return send(res, 400, { error: 'No file uploaded' });
+
+    try {
+      const fileUrl = await uploadFileToBubble(fileEntry.buffer, fileEntry.filename, fileEntry.mimeType);
+      await storeSignedNDA(outreachId, fileUrl);
+      // Generate NDA return draft for admin approval
+      const outreach = await getLangcliffeOutreach(outreachId);
+      if (outreach) {
+        await generateAndQueueNDAReturn(outreach);
+      }
+      return send(res, 200, { ok: true });
+    } catch (err) {
+      console.error(`[user] signed-nda upload failed: ${err.message}`);
+      return send(res, 500, { error: 'Upload failed', detail: err.message });
+    }
   }
 
   // ── 404 fallback ────────────────────────────────────────────────────────────

@@ -395,8 +395,8 @@ export async function getPendingOutreachQueue() {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
 
-  // Fetch both initial drafts (pending) and reply drafts (pending_reply)
-  const [pendingRes, replyRes] = await Promise.all([
+  // Fetch initial drafts (pending), reply drafts (pending_reply), NDA received (nda_received), and signed NDAs (nda_signed)
+  const [pendingRes, replyRes, ndaReceivedRes, ndaSignedRes] = await Promise.all([
     fetch(
       `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(JSON.stringify([{ key: 'status_text', constraint_type: 'equals', value: 'pending' }]))}&sort_field=Created Date&descending=true`,
       { headers: { Authorization: `Bearer ${apiKey}` } },
@@ -405,15 +405,29 @@ export async function getPendingOutreachQueue() {
       `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(JSON.stringify([{ key: 'status_text', constraint_type: 'equals', value: 'pending_reply' }]))}&sort_field=Created Date&descending=true`,
       { headers: { Authorization: `Bearer ${apiKey}` } },
     ),
+    fetch(
+      `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(JSON.stringify([{ key: 'status_text', constraint_type: 'equals', value: 'nda_received' }]))}&sort_field=Created Date&descending=true`,
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+    ),
+    fetch(
+      `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(JSON.stringify([{ key: 'status_text', constraint_type: 'equals', value: 'nda_signed' }]))}&sort_field=Created Date&descending=true`,
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+    ),
   ]);
 
-  if (!pendingRes.ok) throw new Error(`Bubble getPendingOutreachQueue (pending) returned HTTP ${pendingRes.status}`);
-  if (!replyRes.ok)   throw new Error(`Bubble getPendingOutreachQueue (pending_reply) returned HTTP ${replyRes.status}`);
+  if (!pendingRes.ok)     throw new Error(`Bubble getPendingOutreachQueue (pending) returned HTTP ${pendingRes.status}`);
+  if (!replyRes.ok)       throw new Error(`Bubble getPendingOutreachQueue (pending_reply) returned HTTP ${replyRes.status}`);
+  if (!ndaReceivedRes.ok) throw new Error(`Bubble getPendingOutreachQueue (nda_received) returned HTTP ${ndaReceivedRes.status}`);
+  if (!ndaSignedRes.ok)   throw new Error(`Bubble getPendingOutreachQueue (nda_signed) returned HTTP ${ndaSignedRes.status}`);
 
-  const [pendingJson, replyJson] = await Promise.all([pendingRes.json(), replyRes.json()]);
+  const [pendingJson, replyJson, ndaReceivedJson, ndaSignedJson] = await Promise.all([
+    pendingRes.json(), replyRes.json(), ndaReceivedRes.json(), ndaSignedRes.json(),
+  ]);
   return [
     ...(pendingJson.response?.results ?? []),
     ...(replyJson.response?.results ?? []),
+    ...(ndaReceivedJson.response?.results ?? []),
+    ...(ndaSignedJson.response?.results ?? []),
   ];
 }
 
@@ -560,4 +574,145 @@ export async function getBuyerInfo(userId) {
   if (!res.ok) throw new Error(`Bubble getBuyerInfo returned HTTP ${res.status}`);
   const json = await res.json();
   return json.response; // { results, count, remaining }
+}
+
+export async function uploadFileToBubble(buffer, filename, mimeType) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const formData = new FormData();
+  const blob = new Blob([buffer], { type: mimeType });
+  formData.append('fileupload', blob, filename);
+
+  const res = await fetch('https://toby-85612.bubbleapps.io/version-test/fileupload', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Bubble file upload returned HTTP ${res.status}: ${text}`);
+  }
+  const text = await res.text();
+  // Bubble returns the file URL as plain text
+  return text.trim();
+}
+
+export async function updateOutreachNDA({ outreachId, ndaFileUrl, replyBody, ackDraft }) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/LangcliffeOutreach/${outreachId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      nda_file_file:             ndaFileUrl,
+      langcliffe_reply_body_text: replyBody,
+      acknowledgment_draft_text:  ackDraft,
+      status_text:               'nda_received',
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Bubble updateOutreachNDA returned HTTP ${res.status}: ${text}`);
+  }
+}
+
+export async function approveAcknowledgment(outreachId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/LangcliffeOutreach/${outreachId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ status_text: 'nda_acknowledged' }),
+  });
+  if (!res.ok) throw new Error(`Bubble approveAcknowledgment returned HTTP ${res.status}`);
+}
+
+export async function storeSignedNDA(outreachId, signedNdaFileUrl) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/LangcliffeOutreach/${outreachId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ signed_nda_file_file: signedNdaFileUrl, status_text: 'nda_signed' }),
+  });
+  if (!res.ok) throw new Error(`Bubble storeSignedNDA returned HTTP ${res.status}`);
+}
+
+export async function updateNDAReturnDraft(outreachId, ndaReturnDraft) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/LangcliffeOutreach/${outreachId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ nda_return_draft_text: ndaReturnDraft, status_text: 'nda_signed' }),
+  });
+  if (!res.ok) throw new Error(`Bubble updateNDAReturnDraft returned HTTP ${res.status}`);
+}
+
+export async function approveNDAReturn(outreachId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/LangcliffeOutreach/${outreachId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ status_text: 'nda_returned' }),
+  });
+  if (!res.ok) throw new Error(`Bubble approveNDAReturn returned HTTP ${res.status}`);
+}
+
+export async function createUserNotification({ userId, type, title, body, outreachId }) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/UserNotification`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      user_user:                    userId,
+      type_text:                    type,
+      title_text:                   title,
+      body_text:                    body,
+      outreach_langcliffeoutreach:  outreachId,
+      status_text:                  'unread',
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Bubble createUserNotification returned HTTP ${res.status}: ${text}`);
+  }
+}
+
+export async function getUserNotifications(userId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'user_user',   constraint_type: 'equals', value: userId },
+    { key: 'status_text', constraint_type: 'equals', value: 'unread' },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/UserNotification?constraints=${encodeURIComponent(constraints)}&sort_field=Created Date&descending=true`;
+
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getUserNotifications returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response?.results ?? [];
+}
+
+export async function markNotificationActioned(notificationId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/UserNotification/${notificationId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ status_text: 'actioned' }),
+  });
+  if (!res.ok) throw new Error(`Bubble markNotificationActioned returned HTTP ${res.status}`);
 }
