@@ -395,15 +395,26 @@ export async function getPendingOutreachQueue() {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
 
-  const constraints = JSON.stringify([
-    { key: 'status_text', constraint_type: 'equals', value: 'pending' },
+  // Fetch both initial drafts (pending) and reply drafts (pending_reply)
+  const [pendingRes, replyRes] = await Promise.all([
+    fetch(
+      `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(JSON.stringify([{ key: 'status_text', constraint_type: 'equals', value: 'pending' }]))}&sort_field=Created Date&descending=true`,
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+    ),
+    fetch(
+      `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(JSON.stringify([{ key: 'status_text', constraint_type: 'equals', value: 'pending_reply' }]))}&sort_field=Created Date&descending=true`,
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+    ),
   ]);
-  const url = `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(constraints)}&sort_field=Created Date&descending=true`;
 
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
-  if (!res.ok) throw new Error(`Bubble getPendingOutreachQueue returned HTTP ${res.status}`);
-  const json = await res.json();
-  return json.response?.results ?? [];
+  if (!pendingRes.ok) throw new Error(`Bubble getPendingOutreachQueue (pending) returned HTTP ${pendingRes.status}`);
+  if (!replyRes.ok)   throw new Error(`Bubble getPendingOutreachQueue (pending_reply) returned HTTP ${replyRes.status}`);
+
+  const [pendingJson, replyJson] = await Promise.all([pendingRes.json(), replyRes.json()]);
+  return [
+    ...(pendingJson.response?.results ?? []),
+    ...(replyJson.response?.results ?? []),
+  ];
 }
 
 export async function approveOutreach(outreachId) {
@@ -434,6 +445,106 @@ export async function rejectOutreach(outreachId, newDraftBody) {
     body: JSON.stringify({ draft_body_text: newDraftBody, status_text: 'pending' }),
   });
   if (!res.ok) throw new Error(`Bubble rejectOutreach returned HTTP ${res.status}`);
+}
+
+export async function getMostRecentSentOutreach(userId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'user_user',   constraint_type: 'equals', value: userId },
+    { key: 'status_text', constraint_type: 'equals', value: 'sent' },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(constraints)}&sort_field=sent_at_date&descending=true&limit=1`;
+
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getMostRecentSentOutreach returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response?.results?.[0] ?? null;
+}
+
+export async function getOutreachByContact(userId, langcliffeContactEmail) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'user_user',               constraint_type: 'equals', value: userId },
+    { key: 'langcliffe_contact_text', constraint_type: 'equals', value: langcliffeContactEmail },
+    { key: 'status_text',             constraint_type: 'equals', value: 'sent' },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(constraints)}&sort_field=Created Date&descending=true&limit=1`;
+
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getOutreachByContact returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response?.results?.[0] ?? null;
+}
+
+export async function updateOutreachReply({ outreachId, langcliffeReplyBody, replyDraft, conversationHistory }) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/LangcliffeOutreach/${outreachId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      langcliffe_reply_body_text: langcliffeReplyBody,
+      reply_draft_text:           replyDraft,
+      conversation_history_text:  conversationHistory,
+      status_text:                'pending_reply',
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Bubble updateOutreachReply returned HTTP ${res.status}: ${text}`);
+  }
+}
+
+export async function approveReply(outreachId, conversationHistory) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const payload = { status_text: 'sent', sent_at_date: new Date().toISOString() };
+  if (conversationHistory) payload.conversation_history_text = conversationHistory;
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/LangcliffeOutreach/${outreachId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Bubble approveReply returned HTTP ${res.status}`);
+}
+
+export async function updateReplyDraft(outreachId, replyDraft) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/LangcliffeOutreach/${outreachId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({ reply_draft_text: replyDraft, status_text: 'pending_reply' }),
+  });
+  if (!res.ok) throw new Error(`Bubble updateReplyDraft returned HTTP ${res.status}`);
+}
+
+export async function deleteOutreach(outreachId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/LangcliffeOutreach/${outreachId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  if (!res.ok) throw new Error(`Bubble deleteOutreach returned HTTP ${res.status}`);
 }
 
 export async function getBuyerInfo(userId) {

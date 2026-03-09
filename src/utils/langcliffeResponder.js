@@ -8,6 +8,9 @@ import {
   getLangcliffeOutreach,
   approveOutreach,
   rejectOutreach,
+  updateOutreachReply,
+  approveReply,
+  updateReplyDraft,
 } from './bubbleClient.js';
 import {
   buildGoldenString,
@@ -304,6 +307,162 @@ export async function sendApprovedOutreach(outreachId) {
 
   await approveOutreach(outreachId);
   console.log(`[langcliffe] Outreach sent for ${outreach.listing_id_text} → ${recipient}${testRecipient ? ' (test override)' : ''}`);
+}
+
+// ── Reply handling ────────────────────────────────────────────────────────────
+
+async function generateReplyBody({ outreach, inboundMessage, buyerProfile, agentName, agentEmail }) {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+  const contactFirstName = outreach.langcliffe_contact_text
+    ?.match(/<([^>]+)>/)?.[1]?.split('@')[0]?.replace(/[._-]/g, ' ')
+    ?? outreach.langcliffe_contact_text?.split('@')[0]?.replace(/[._-]/g, ' ')
+    ?? 'there';
+
+  const conversationHistory = outreach.conversation_history_text ?? '';
+  const historySection = conversationHistory
+    ? `Conversation history so far:\n${conversationHistory}\n\n`
+    : `Your original expression of interest:\n${outreach.draft_body_text}\n\n`;
+
+  const prompt = `You are ${agentName}, an M&A acquisition advisor at Acquiro. You are in an email conversation with a business broker at Langcliffe International about the opportunity "${outreach.business_name_text}".
+
+${historySection}The broker (${contactFirstName}) has now replied:
+"${inboundMessage}"
+
+Write a concise, professional reply (under 150 words). Plain text only, no subject line. Respond naturally and appropriately to whatever they have said — whether it's a question, asking for more info, sending an NDA, confirming next steps, or anything else. Stay in character as ${agentName} at Acquiro. Sign off: ${agentName} | ${agentEmail}`;
+
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.4,
+  });
+
+  return completion.choices[0].message.content.trim();
+}
+
+function buildConversationHistory({ existing, agentName, langcliffeReply, replyDraft }) {
+  const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const base = existing || '';
+  const langcliffeBlock = `[${date}] Langcliffe → ${agentName}:\n${langcliffeReply}`;
+  const agentBlock = `[Pending] ${agentName} → Langcliffe:\n${replyDraft}`;
+  return base ? `${base}\n\n---\n\n${langcliffeBlock}\n\n---\n\n${agentBlock}` : `${langcliffeBlock}\n\n---\n\n${agentBlock}`;
+}
+
+/**
+ * Called when a Langcliffe contact replies to an outreach email.
+ * Generates a reply draft and queues it for admin approval.
+ */
+export async function handleLangcliffeReply({ outreach, inboundMessage, userId }) {
+  const agent = await getAgentForUser(userId);
+  const agentName  = agent?.name_text ?? agent?.name ?? 'Your Agent';
+  const agentEmail = agent?.email_text ?? 'agent@acquiro.ai';
+
+  const profileRes   = await getBuyerInfo(userId);
+  const buyerProfile = profileRes?.results?.[0] ?? {};
+
+  const replyDraft = await generateReplyBody({ outreach, inboundMessage, buyerProfile, agentName, agentEmail });
+
+  const conversationHistory = buildConversationHistory({
+    existing:       outreach.conversation_history_text ?? '',
+    agentName,
+    langcliffeReply: inboundMessage,
+    replyDraft,
+  });
+
+  await updateOutreachReply({
+    outreachId:          outreach._id,
+    langcliffeReplyBody: inboundMessage,
+    replyDraft,
+    conversationHistory,
+  });
+
+  console.log(`[langcliffe] Reply draft queued for outreach ${outreach._id} — awaiting admin approval`);
+}
+
+/**
+ * Send an approved reply to a Langcliffe contact.
+ */
+export async function sendApprovedReply(outreachId) {
+  const outreach = await getLangcliffeOutreach(outreachId);
+  if (!outreach) throw new Error(`LangcliffeOutreach record not found: ${outreachId}`);
+  if (!outreach.reply_draft_text) throw new Error(`No reply draft on outreach: ${outreachId}`);
+
+  const userId = outreach.user_user;
+  const agent  = await getAgentForUser(userId);
+
+  const rawName   = agent?.name_text ?? agent?.name ?? 'agent';
+  const fromEmail = `${sanitiseAgentName(rawName)}@acquiro-agent.com`;
+  const fromName  = agentDisplayName(rawName);
+
+  const ref     = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
+  const subject = `RE: Acquisition enquiry — Ref ${ref}: ${outreach.business_name_text ?? 'Business opportunity'}`;
+
+  const testRecipient = process.env.LANGCLIFFE_TEST_RECIPIENT;
+  const recipient     = testRecipient || outreach.langcliffe_contact_text;
+
+  await sendViaSendGrid({ from: fromEmail, fromName, to: recipient, subject, body: outreach.reply_draft_text });
+
+  // Mark the pending block in conversation history as sent
+  const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const updatedHistory = (outreach.conversation_history_text ?? '').replace('[Pending]', `[${date}]`);
+
+  await approveReply(outreachId, updatedHistory);
+  console.log(`[langcliffe] Reply sent for ${outreach.listing_id_text} → ${recipient}${testRecipient ? ' (test override)' : ''}`);
+}
+
+/**
+ * Regenerate a reply draft with admin feedback.
+ */
+export async function rewriteReplyDraft(outreachId, feedback) {
+  const outreach = await getLangcliffeOutreach(outreachId);
+  if (!outreach) throw new Error(`LangcliffeOutreach record not found: ${outreachId}`);
+
+  const userId       = outreach.user_user;
+  const agent        = await getAgentForUser(userId);
+  const agentName    = agent?.name_text ?? agent?.name ?? 'Your Agent';
+  const agentEmail   = agent?.email_text ?? 'agent@acquiro.ai';
+  const profileRes   = await getBuyerInfo(userId);
+  const buyerProfile = profileRes?.results?.[0] ?? {};
+
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+  const feedbackSection = feedback ? `\n\nAdmin feedback on the previous reply:\n"${feedback}"\nPlease address this in the rewrite.` : '';
+  const contactFirstName = outreach.langcliffe_contact_text?.split('@')[0]?.replace(/[._-]/g, ' ') ?? 'there';
+  const companyOverview  = getField(buyerProfile, 'company_overview_text') ?? '';
+
+  const prompt = `Rewrite the following reply email. Keep it concise (under 150 words), professional, and plain text only. No subject line.${feedbackSection}
+
+Previous reply draft:
+${outreach.reply_draft_text}
+
+Context:
+- Broker contact: ${contactFirstName}
+- Business: ${outreach.business_name_text ?? 'the business'}
+- Their message we're replying to: ${outreach.langcliffe_reply_body_text ?? '(see conversation)'}
+- Our company overview: ${companyOverview}
+- Agent signing off: ${agentName} | ${agentEmail}`;
+
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.4,
+  });
+
+  const newReplyDraft = completion.choices[0].message.content.trim();
+
+  // Update reply draft and rebuild the pending block in conversation history
+  const updatedHistory = (outreach.conversation_history_text ?? '')
+    .replace(/\[Pending\].*$/s, `[Pending] ${agentName} → Langcliffe:\n${newReplyDraft}`);
+
+  await updateOutreachReply({
+    outreachId:          outreachId,
+    langcliffeReplyBody: outreach.langcliffe_reply_body_text ?? '',
+    replyDraft:          newReplyDraft,
+    conversationHistory: updatedHistory,
+  });
+
+  console.log(`[langcliffe] Reply draft rewritten for ${outreach.listing_id_text}`);
+  return newReplyDraft;
 }
 
 /**

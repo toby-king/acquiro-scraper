@@ -33,11 +33,11 @@ import { RightbizScraper } from './scrapers/rightbiz.js';
 import { CoGoGoScraper } from './scrapers/cogogo.js';
 import { DaltonsScraper } from './scrapers/daltons.js';
 import { BusinessesForSaleScraper } from './scrapers/businessesforsale.js';
-import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId } from './utils/bubbleClient.js';
+import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId, deleteOutreach, getOutreachByContact, getMostRecentSentOutreach } from './utils/bubbleClient.js';
 import { generateMatchesForUser } from './utils/matcher.js';
 import { processAndIndexListing } from './utils/indexer.js';
 import { parseLangcliffeEmail } from './utils/langcliffeParser.js';
-import { processLangcliffeListings, sendApprovedOutreach, rewriteOutreachDraft } from './utils/langcliffeResponder.js';
+import { processLangcliffeListings, sendApprovedOutreach, rewriteOutreachDraft, handleLangcliffeReply, sendApprovedReply, rewriteReplyDraft } from './utils/langcliffeResponder.js';
 import { runArchiver } from './archiver.js';
 import { runEmailNotifications, sendEmailForUser } from './utils/emailNotifier.js';
 
@@ -410,6 +410,47 @@ const server = createServer(async (req, res) => {
         }
       }
 
+      // POST /admin/langcliffe-queue/:id/approve-reply
+      const approveReplyMatch = url.match(/^\/admin\/langcliffe-queue\/([^/]+)\/approve-reply$/);
+      if (method === 'POST' && approveReplyMatch) {
+        const outreachId = approveReplyMatch[1];
+        try {
+          await sendApprovedReply(outreachId);
+          return send(res, 200, { ok: true, message: 'Reply sent' });
+        } catch (err) {
+          console.error(`[admin] approve-reply failed for ${outreachId}: ${err.message}`);
+          return send(res, 500, { error: 'Reply send failed', detail: err.message });
+        }
+      }
+
+      // POST /admin/langcliffe-queue/:id/reject-reply
+      const rejectReplyMatch = url.match(/^\/admin\/langcliffe-queue\/([^/]+)\/reject-reply$/);
+      if (method === 'POST' && rejectReplyMatch) {
+        const outreachId = rejectReplyMatch[1];
+        let body = {};
+        try { body = await readBody(req); } catch { /* feedback optional */ }
+        try {
+          const newDraft = await rewriteReplyDraft(outreachId, body.feedback ?? null);
+          return send(res, 200, { ok: true, draft: newDraft });
+        } catch (err) {
+          console.error(`[admin] reject-reply failed for ${outreachId}: ${err.message}`);
+          return send(res, 500, { error: 'Reply rewrite failed', detail: err.message });
+        }
+      }
+
+      // POST /admin/langcliffe-queue/:id/delete
+      const deleteMatch = url.match(/^\/admin\/langcliffe-queue\/([^/]+)\/delete$/);
+      if (method === 'POST' && deleteMatch) {
+        const outreachId = deleteMatch[1];
+        try {
+          await deleteOutreach(outreachId);
+          return send(res, 200, { ok: true, message: 'Draft deleted' });
+        } catch (err) {
+          console.error(`[admin] delete failed for ${outreachId}: ${err.message}`);
+          return send(res, 500, { error: 'Delete failed', detail: err.message });
+        }
+      }
+
       return send(res, 404, { error: 'Unknown Langcliffe queue endpoint' });
     }
 
@@ -513,8 +554,10 @@ const server = createServer(async (req, res) => {
     // Process asynchronously after ack
     (async () => {
 
-      const rawTo     = (fields.to ?? '').trim();
-      const toEmail   = (rawTo.match(/<([^>]+)>/) ? rawTo.match(/<([^>]+)>/)[1] : rawTo).toLowerCase().trim();
+      const rawTo     = (fields.to   ?? '').trim();
+      const rawFrom   = (fields.from ?? '').trim();
+      const toEmail   = (rawTo.match(/<([^>]+)>/)   ? rawTo.match(/<([^>]+)>/)[1]   : rawTo).toLowerCase().trim();
+      const fromEmail = (rawFrom.match(/<([^>]+)>/) ? rawFrom.match(/<([^>]+)>/)[1] : rawFrom).toLowerCase().trim();
       const emailText = fields.text  ?? fields.html ?? '';
 
       if (!toEmail || !emailText) {
@@ -554,7 +597,43 @@ const server = createServer(async (req, res) => {
       }
 
       if (!parsed) {
-        console.log('[webhook] Not a Langcliffe teaser email — nothing to do');
+        // Not a teaser — check if it's a reply from a known Langcliffe contact
+        if (fromEmail) {
+          let outreach;
+          try {
+            outreach = await getOutreachByContact(userId, fromEmail);
+          } catch (err) {
+            console.error(`[webhook] getOutreachByContact failed: ${err.message}`);
+            return;
+          }
+
+          if (!outreach) {
+            // Test mode fallback: if from is the test recipient, use the most recent sent outreach
+            const testRecipient = process.env.LANGCLIFFE_TEST_RECIPIENT?.toLowerCase().trim();
+            if (testRecipient && fromEmail === testRecipient) {
+              console.log(`[webhook] Test mode: looking up most recent sent outreach for user ${userId}`);
+              try {
+                outreach = await getMostRecentSentOutreach(userId);
+              } catch (err) {
+                console.error(`[webhook] getMostRecentSentOutreach failed: ${err.message}`);
+                return;
+              }
+            }
+          }
+
+          if (!outreach) {
+            console.log(`[webhook] No sent outreach found for contact ${fromEmail} — ignoring`);
+            return;
+          }
+
+          try {
+            await handleLangcliffeReply({ outreach, inboundMessage: emailText, userId });
+          } catch (err) {
+            console.error(`[webhook] handleLangcliffeReply failed: ${err.message}`);
+          }
+        } else {
+          console.log('[webhook] Not a Langcliffe teaser and no from address — nothing to do');
+        }
         return;
       }
 
