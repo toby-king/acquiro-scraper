@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { Pinecone } from '@pinecone-database/pinecone';
 import {
   getBuyerInfo,
+  getUserDetails,
   getAgentForUser,
   checkOutreachExists,
   createOutreachDraft,
@@ -653,7 +654,8 @@ export async function handleNDAReceived({ outreach, inboundMessage, pdfBuffer, p
   // Auto-send user notification email (no admin approval needed — going to user not broker)
   const profileRes  = await getBuyerInfo(userId);
   const profile     = profileRes?.results?.[0];
-  const userEmail   = profile?.email ?? null;
+  const userDetails = await getUserDetails(userId);
+  const userEmail   = userDetails?.email ?? null;
   const listingRef  = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
 
   if (userEmail) {

@@ -461,37 +461,47 @@ export async function rejectOutreach(outreachId, newDraftBody) {
   if (!res.ok) throw new Error(`Bubble rejectOutreach returned HTTP ${res.status}`);
 }
 
+// Active statuses — any outreach that is part of an ongoing conversation
+const ACTIVE_STATUSES = ['sent', 'pending_reply', 'nda_received', 'nda_acknowledged'];
+
 export async function getMostRecentSentOutreach(userId) {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
 
-  const constraints = JSON.stringify([
-    { key: 'user_user',   constraint_type: 'equals', value: userId },
-    { key: 'status_text', constraint_type: 'equals', value: 'sent' },
-  ]);
-  const url = `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(constraints)}&sort_field=sent_at_date&descending=true&limit=1`;
-
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
-  if (!res.ok) throw new Error(`Bubble getMostRecentSentOutreach returned HTTP ${res.status}`);
-  const json = await res.json();
-  return json.response?.results?.[0] ?? null;
+  // Try each active status in priority order, return the first match
+  for (const status of ACTIVE_STATUSES) {
+    const constraints = JSON.stringify([
+      { key: 'user_user',   constraint_type: 'equals', value: userId },
+      { key: 'status_text', constraint_type: 'equals', value: status },
+    ]);
+    const url = `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(constraints)}&sort_field=sent_at_date&descending=true&limit=1`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+    if (!res.ok) throw new Error(`Bubble getMostRecentSentOutreach returned HTTP ${res.status}`);
+    const json = await res.json();
+    const result = json.response?.results?.[0];
+    if (result) return result;
+  }
+  return null;
 }
 
 export async function getOutreachByContact(userId, langcliffeContactEmail) {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
 
-  const constraints = JSON.stringify([
-    { key: 'user_user',               constraint_type: 'equals', value: userId },
-    { key: 'langcliffe_contact_text', constraint_type: 'equals', value: langcliffeContactEmail },
-    { key: 'status_text',             constraint_type: 'equals', value: 'sent' },
-  ]);
-  const url = `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(constraints)}&sort_field=Created Date&descending=true&limit=1`;
-
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
-  if (!res.ok) throw new Error(`Bubble getOutreachByContact returned HTTP ${res.status}`);
-  const json = await res.json();
-  return json.response?.results?.[0] ?? null;
+  for (const status of ACTIVE_STATUSES) {
+    const constraints = JSON.stringify([
+      { key: 'user_user',               constraint_type: 'equals', value: userId },
+      { key: 'langcliffe_contact_text', constraint_type: 'equals', value: langcliffeContactEmail },
+      { key: 'status_text',             constraint_type: 'equals', value: status },
+    ]);
+    const url = `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(constraints)}&sort_field=Created Date&descending=true&limit=1`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+    if (!res.ok) throw new Error(`Bubble getOutreachByContact returned HTTP ${res.status}`);
+    const json = await res.json();
+    const result = json.response?.results?.[0];
+    if (result) return result;
+  }
+  return null;
 }
 
 export async function updateOutreachReply({ outreachId, langcliffeReplyBody, replyDraft, conversationHistory }) {
