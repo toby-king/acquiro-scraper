@@ -595,8 +595,9 @@ export async function uploadFileToBubble(buffer, filename, mimeType) {
     throw new Error(`Bubble file upload returned HTTP ${res.status}: ${text}`);
   }
   const text = await res.text();
-  // Bubble returns the file URL as plain text
-  return text.trim();
+  // Bubble returns the file URL as plain text — may be protocol-relative (//host/path)
+  const url = text.trim();
+  return url.startsWith('//') ? `https:${url}` : url;
 }
 
 export async function updateOutreachNDA({ outreachId, ndaFileUrl, replyBody, ackDraft }) {
