@@ -88,9 +88,29 @@ function buildListingGoldenString(listing) {
   return parts.join(' ') || '(no description)';
 }
 
-async function sendViaSendGrid({ from, fromName, to, subject, body }) {
+function generateMessageId(fromDomain = 'acquiro-agent.com') {
+  const ts  = Date.now().toString(36);
+  const rnd = Math.random().toString(36).slice(2, 8);
+  return `<${ts}.${rnd}@${fromDomain}>`;
+}
+
+async function sendViaSendGrid({ from, fromName, to, subject, body, messageId = null, inReplyTo = null }) {
   const apiKey = process.env.SENDGRID_API_KEY;
   if (!apiKey) throw new Error('SENDGRID_API_KEY env var is not set');
+
+  const payload = {
+    personalizations: [{ to: [{ email: to }] }],
+    from: { email: from, name: fromName ?? 'Acquiro' },
+    subject,
+    content: [{ type: 'text/plain', value: body }],
+  };
+
+  // Add threading headers when available
+  const extraHeaders = {};
+  if (messageId)  extraHeaders['Message-ID']  = messageId;
+  if (inReplyTo)  extraHeaders['In-Reply-To'] = inReplyTo;
+  if (inReplyTo)  extraHeaders['References']  = inReplyTo;
+  if (Object.keys(extraHeaders).length > 0) payload.headers = extraHeaders;
 
   const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
     method: 'POST',
@@ -98,12 +118,7 @@ async function sendViaSendGrid({ from, fromName, to, subject, body }) {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      personalizations: [{ to: [{ email: to }] }],
-      from: { email: from, name: fromName ?? 'Acquiro' },
-      subject,
-      content: [{ type: 'text/plain', value: body }],
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
@@ -325,15 +340,18 @@ export async function sendApprovedOutreach(outreachId) {
   const testRecipient = process.env.LANGCLIFFE_TEST_RECIPIENT;
   const recipient = testRecipient || outreach.langcliffe_contact_text;
 
+  const messageId = generateMessageId(fromEmail.split('@')[1] ?? 'acquiro-agent.com');
+
   await sendViaSendGrid({
-    from:     fromEmail,
+    from:      fromEmail,
     fromName,
-    to:       recipient,
+    to:        recipient,
     subject,
-    body:    outreach.draft_body_text,
+    body:      outreach.draft_body_text,
+    messageId,
   });
 
-  await approveOutreach(outreachId);
+  await approveOutreach(outreachId, messageId);
   console.log(`[langcliffe] Outreach sent for ${outreach.listing_id_text} → ${recipient}${testRecipient ? ' (test override)' : ''}`);
 }
 
@@ -431,7 +449,14 @@ export async function sendApprovedReply(outreachId) {
   const testRecipient = process.env.LANGCLIFFE_TEST_RECIPIENT;
   const recipient     = testRecipient || outreach.langcliffe_contact_text;
 
-  await sendViaSendGrid({ from: fromEmail, fromName, to: recipient, subject, body: outreach.reply_draft_text });
+  await sendViaSendGrid({
+    from:       fromEmail,
+    fromName,
+    to:         recipient,
+    subject,
+    body:       outreach.reply_draft_text,
+    inReplyTo:  outreach.thread_message_id_text ?? null,
+  });
 
   // Mark the pending block in conversation history as sent
   const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -777,7 +802,14 @@ export async function sendApprovedAcknowledgment(outreachId) {
   const testRecipient = process.env.LANGCLIFFE_TEST_RECIPIENT;
   const recipient     = testRecipient || outreach.langcliffe_contact_text;
 
-  await sendViaSendGrid({ from: fromEmail, fromName, to: recipient, subject, body: outreach.acknowledgment_draft_text });
+  await sendViaSendGrid({
+    from:      fromEmail,
+    fromName,
+    to:        recipient,
+    subject,
+    body:      outreach.acknowledgment_draft_text,
+    inReplyTo: outreach.thread_message_id_text ?? null,
+  });
   await approveAcknowledgment(outreachId);
   console.log(`[langcliffe] Acknowledgment sent for ${outreach.listing_id_text} → ${recipient}${testRecipient ? ' (test override)' : ''}`);
 }
@@ -829,21 +861,29 @@ export async function sendApprovedNDAReturn(outreachId) {
   const apiKey = process.env.SENDGRID_API_KEY;
   if (!apiKey) throw new Error('SENDGRID_API_KEY env var is not set');
 
+  const ndaReturnPayload = {
+    personalizations: [{ to: [{ email: recipient }] }],
+    from:    { email: fromEmail, name: fromName },
+    subject,
+    content: [{ type: 'text/plain', value: outreach.nda_return_draft_text }],
+    attachments: [{
+      content:     base64File,
+      filename:    'signed-nda.pdf',
+      type:        'application/pdf',
+      disposition: 'attachment',
+    }],
+  };
+  if (outreach.thread_message_id_text) {
+    ndaReturnPayload.headers = {
+      'In-Reply-To': outreach.thread_message_id_text,
+      'References':  outreach.thread_message_id_text,
+    };
+  }
+
   const sgRes = await fetch('https://api.sendgrid.com/v3/mail/send', {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      personalizations: [{ to: [{ email: recipient }] }],
-      from:    { email: fromEmail, name: fromName },
-      subject,
-      content: [{ type: 'text/plain', value: outreach.nda_return_draft_text }],
-      attachments: [{
-        content:     base64File,
-        filename:    'signed-nda.pdf',
-        type:        'application/pdf',
-        disposition: 'attachment',
-      }],
-    }),
+    body: JSON.stringify(ndaReturnPayload),
   });
 
   if (!sgRes.ok) {

@@ -431,9 +431,12 @@ export async function getPendingOutreachQueue() {
   ];
 }
 
-export async function approveOutreach(outreachId) {
+export async function approveOutreach(outreachId, threadMessageId = null) {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const body = { status_text: 'sent', sent_at_date: new Date().toISOString() };
+  if (threadMessageId) body.thread_message_id_text = threadMessageId;
 
   const res = await fetch(`${BUBBLE_BASE}/obj/LangcliffeOutreach/${outreachId}`, {
     method: 'PATCH',
@@ -441,7 +444,7 @@ export async function approveOutreach(outreachId) {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({ status_text: 'sent', sent_at_date: new Date().toISOString() }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`Bubble approveOutreach returned HTTP ${res.status}`);
 }
