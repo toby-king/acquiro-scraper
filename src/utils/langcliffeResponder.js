@@ -63,6 +63,22 @@ function agentDisplayName(name) {
   return `${titled} @ Acquiro`;
 }
 
+/**
+ * Extract the company name from a company overview string.
+ * Looks for a proper noun at the start, or the first capitalised multi-word phrase.
+ * Falls back to "our client" if nothing useful is found.
+ */
+function extractCompanyName(overview) {
+  if (!overview) return null;
+  // Common patterns: "Acme Ltd is...", "Acme Limited is...", "Acme Group..."
+  const match = overview.match(/^([A-Z][A-Za-z0-9&' ]{1,50?}(?:Ltd|Limited|Group|Holdings|Inc|LLP|LLC|PLC|plc)?)\b/);
+  if (match) return match[1].trim();
+  // Fallback: first capitalised word sequence before a verb
+  const fallback = overview.match(/^([A-Z][a-zA-Z0-9 &']{2,40})\s+(?:is |are |was |has |have |provides|offers|operates|specialises|acquires)/);
+  if (fallback) return fallback[1].trim();
+  return null;
+}
+
 function buildListingGoldenString(listing) {
   const parts = [];
   if (listing.business_name) parts.push(listing.business_name + '.');
@@ -103,6 +119,7 @@ async function generateDraftBody({ listing, buyerProfile, agentName, agentEmail 
 
   const contactFirstName = listing.langcliffeContactName?.split(' ')[0] ?? 'there';
   const companyOverview  = getField(buyerProfile, 'company_overview_text') ?? '';
+  const companyName      = extractCompanyName(companyOverview) ?? 'our client';
   const fundingSource    = getField(buyerProfile, 'funding_source', 'funding_source_text') ?? '';
   const geography        = getField(buyerProfile, 'geography', 'geography_text') ?? 'UK';
 
@@ -111,16 +128,17 @@ async function generateDraftBody({ listing, buyerProfile, agentName, agentEmail 
 Broker contact first name: ${contactFirstName}
 Listing reference: ${listing.ref_id}
 Business type: ${listing.business_name} (${listing.sector}, ${listing.location})
-Our company overview: ${companyOverview}
-Our funding approach: ${fundingSource}
+Writing on behalf of: ${companyName}
+Company overview: ${companyOverview}
+Funding approach: ${fundingSource}
 Agent signing off: ${agentName} | ${agentEmail}
 
 Structure:
 1. Brief greeting using the first name.
-2. One sentence expressing interest in this specific opportunity (mention reference number and business type).
-3. Two to three sentences introducing who we are and our acquisition focus (use the company overview).
-4. One sentence on funding / how we approach deals.
-5. Ask to proceed: confirm we are happy to review the NDA and look forward to the IM.
+2. One sentence expressing interest in this specific opportunity (mention reference number and business type). State you are writing on behalf of ${companyName}.
+3. Two to three sentences introducing ${companyName} and their acquisition focus (use the company overview).
+4. One sentence on funding / how they approach deals.
+5. Ask to proceed: confirm you are happy to review the NDA and look forward to the IM.
 6. Professional sign-off with agent name and email.
 
 Keep it concise — under 200 words total. Do NOT include a subject line. Plain text only.`;
@@ -329,17 +347,20 @@ async function generateReplyBody({ outreach, inboundMessage, buyerProfile, agent
     ?? outreach.langcliffe_contact_text?.split('@')[0]?.replace(/[._-]/g, ' ')
     ?? 'there';
 
+  const companyOverview = getField(buyerProfile, 'company_overview_text') ?? '';
+  const companyName     = extractCompanyName(companyOverview) ?? 'our client';
+
   const conversationHistory = outreach.conversation_history_text ?? '';
   const historySection = conversationHistory
     ? `Conversation history so far:\n${conversationHistory}\n\n`
     : `Your original expression of interest:\n${outreach.draft_body_text}\n\n`;
 
-  const prompt = `You are ${agentName}, an M&A acquisition advisor at Acquiro. You are in an email conversation with a business broker at Langcliffe International about the opportunity "${outreach.business_name_text}".
+  const prompt = `You are ${agentName}, an M&A acquisition advisor writing on behalf of ${companyName}. You are in an email conversation with a business broker at Langcliffe International about the opportunity "${outreach.business_name_text}".
 
 ${historySection}The broker (${contactFirstName}) has now replied:
 "${inboundMessage}"
 
-Write a concise, professional reply (under 150 words). Plain text only, no subject line. Respond naturally and appropriately to whatever they have said — whether it's a question, asking for more info, sending an NDA, confirming next steps, or anything else. Stay in character as ${agentName} at Acquiro. Sign off: ${agentName} | ${agentEmail}`;
+Write a concise, professional reply (under 150 words). Plain text only, no subject line. Respond naturally and appropriately to whatever they have said — whether it's a question, asking for more info, sending an NDA, confirming next steps, or anything else. When referring to the acquiring company, use "${companyName}". Sign off: ${agentName} | ${agentEmail}`;
 
   const completion = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
@@ -439,6 +460,7 @@ export async function rewriteReplyDraft(outreachId, feedback) {
   const feedbackSection = feedback ? `\n\nAdmin feedback on the previous reply:\n"${feedback}"\nPlease address this in the rewrite.` : '';
   const contactFirstName = outreach.langcliffe_contact_text?.split('@')[0]?.replace(/[._-]/g, ' ') ?? 'there';
   const companyOverview  = getField(buyerProfile, 'company_overview_text') ?? '';
+  const companyName      = extractCompanyName(companyOverview) ?? 'our client';
 
   const prompt = `Rewrite the following reply email. Keep it concise (under 150 words), professional, and plain text only. No subject line.${feedbackSection}
 
@@ -449,7 +471,8 @@ Context:
 - Broker contact: ${contactFirstName}
 - Business: ${outreach.business_name_text ?? 'the business'}
 - Their message we're replying to: ${outreach.langcliffe_reply_body_text ?? '(see conversation)'}
-- Our company overview: ${companyOverview}
+- Writing on behalf of: ${companyName}
+- Company overview: ${companyOverview}
 - Agent signing off: ${agentName} | ${agentEmail}`;
 
   const completion = await openai.chat.completions.create({
@@ -498,6 +521,7 @@ export async function rewriteOutreachDraft(outreachId, feedback) {
 
   const contactFirstName = outreach.langcliffe_contact_text?.split('@')[0].replace('.', ' ') ?? 'there';
   const companyOverview  = getField(p, 'company_overview_text') ?? '';
+  const companyName      = extractCompanyName(companyOverview) ?? 'our client';
   const fundingSource    = getField(p, 'funding_source', 'funding_source_text') ?? '';
   const ref              = outreach.listing_id_text?.replace('langcliffe-', '') ?? '';
 
@@ -512,8 +536,9 @@ Context:
 - Broker contact first name: ${contactFirstName}
 - Listing reference: ${ref}
 - Business: ${outreach.business_name_text ?? 'the business'}
-- Our company overview: ${companyOverview}
-- Our funding approach: ${fundingSource}
+- Writing on behalf of: ${companyName}
+- Company overview: ${companyOverview}
+- Funding approach: ${fundingSource}
 - Agent signing off: ${agentName} | ${agentEmail}`;
 
   const completion = await openai.chat.completions.create({
