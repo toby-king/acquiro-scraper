@@ -281,6 +281,22 @@ export async function getTopMatchesForUser(userId, limit = 5) {
   return json.response?.results ?? [];
 }
 
+export async function getBusinessByName(name) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'business_name_text', constraint_type: 'contains', value: name },
+    { key: 'archived', constraint_type: 'equals', value: false },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/Business?constraints=${encodeURIComponent(constraints)}&limit=1`;
+
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getBusinessByName returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response?.results?.[0] ?? null;
+}
+
 export async function getBusinessById(bubbleId) {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');

@@ -299,15 +299,19 @@ export async function generateMatchesForUser(userId) {
 
   await Promise.all(
     matches.map((match) =>
-      fetch(`${BUBBLE_BASE}/wf/create_match`, {
+      fetch(`${BUBBLE_BASE}/obj/matches`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${process.env.BUBBLE_API_KEY}`,
         },
-        body: JSON.stringify({ user_id: userId, business_id: match.id, score: match.score }),
-      }).then((wfRes) => {
-        if (!wfRes.ok) throw new Error(`create_match returned HTTP ${wfRes.status} for ${match.id}`);
+        body: JSON.stringify({
+          user_user: userId,
+          business_custom_business: match.id,
+          score_number: match.score,
+        }),
+      }).then((res) => {
+        if (!res.ok) throw new Error(`create_match returned HTTP ${res.status} for ${match.id}`);
         console.log(`[generate-matches] Created match: business=${match.id} score=${match.score}`);
       }),
     ),

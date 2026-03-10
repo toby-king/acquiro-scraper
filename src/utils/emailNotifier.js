@@ -51,7 +51,7 @@ function formatBusinessForPrompt(business) {
   if (!business) return null;
   const name   = business.business_name_text ?? business.title_text ?? 'Unknown Business';
   const price  = business.asking_price_text ?? business.asking_price_number ?? 'POA';
-  const sector = business.sector_text ?? 'Unknown sector';
+  const sector = business.sector1_text ?? 'Unknown sector';
   const loc    = business.location_text ?? 'UK';
   const desc   = (business.description_text ?? '').slice(0, 300).trim();
 

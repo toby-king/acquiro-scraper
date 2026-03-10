@@ -20,6 +20,7 @@ import {
   getBuyerInfo,
   createEmailRecord,
   updateBuyerCriteria,
+  getBusinessByName,
 } from './bubbleClient.js';
 
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
@@ -66,7 +67,48 @@ Reply with just the classification word, nothing else.`;
   return 'general';
 }
 
-async function generateReply(openai, { intent, emailText, threadHistory, agentName, buyerInfo }) {
+async function identifyListingName(openai, { emailText, threadHistory, agentName }) {
+  const historyText = threadHistory
+    .map((m) => `[${m.is_agent ? agentName : 'User'}]: ${m.body}`)
+    .join('\n\n');
+
+  const prompt = `From this email thread, identify the exact name of the business the user is asking about.
+
+Thread:
+${historyText}
+
+User's latest message:
+${emailText}
+
+Return only the business name as a plain string, nothing else. If you cannot identify a specific business, return an empty string.`;
+
+  const response = await openai.responses.create({
+    model: 'gpt-4o-mini',
+    input: prompt,
+  });
+
+  return (response.output_text ?? '').trim().replace(/^["']|["']$/g, '');
+}
+
+function formatFullListing(business) {
+  if (!business) return null;
+  const fields = [
+    `Name: ${business.business_name_text ?? 'Unknown'}`,
+    `Sector: ${business.sector1_text ?? 'Unknown'}`,
+    `Location: ${business.location_text ?? 'UK'}`,
+    `Asking price: ${business.asking_price_text ?? business.asking_price_number ?? 'POA'}`,
+    `Turnover: ${business.turnover_text ?? business.turnover_number ?? 'Not stated'}`,
+    `EBITDA: ${business.ebitda_text ?? business.ebitda_number ?? 'Not stated'}`,
+    `Established: ${business.established_text ?? 'Not stated'}`,
+    `Employees: ${business.employees_text ?? business.employees_number ?? 'Not stated'}`,
+    business.description_text ? `Description: ${business.description_text}` : null,
+    business.more_info_text ? `Additional info: ${business.more_info_text}` : null,
+    business.url_text ? `Listing URL: ${business.url_text}` : null,
+  ];
+  return fields.filter(Boolean).join('\n');
+}
+
+async function generateReply(openai, { intent, emailText, threadHistory, agentName, buyerInfo, fullListing }) {
   const historyText = threadHistory
     .map((m) => `[${m.is_agent ? agentName : 'User'}]: ${m.body}`)
     .join('\n\n');
@@ -77,7 +119,11 @@ async function generateReply(openai, { intent, emailText, threadHistory, agentNa
 
   let intentInstructions = '';
   if (intent === 'specific_listing') {
-    intentInstructions = 'The user is asking about a specific listing. Reference the relevant business from the thread context and provide helpful, detailed information about it. If you cannot identify the specific listing, ask the user to clarify which one they mean.';
+    if (fullListing) {
+      intentInstructions = `The user is asking about a specific listing. Here are the full details for that business:\n\n${fullListing}\n\nUse this information to give a thorough, helpful response. Highlight the most relevant details for an acquirer.`;
+    } else {
+      intentInstructions = 'The user is asking about a specific listing. Reference the relevant business from the thread context and provide helpful, detailed information about it. If you cannot identify the specific listing, ask the user to clarify which one they mean.';
+    }
   } else if (intent === 'criteria_update') {
     intentInstructions = 'The user has updated their buying criteria. Acknowledge the changes warmly, confirm what you have noted, and let them know you will adjust their matches accordingly.';
   } else {
@@ -176,10 +222,25 @@ export async function handleUserReply({ threadId, fromEmail, emailText, toAgentE
   const intent = await classifyIntent(openai, { emailText, threadHistory, agentName, buyerInfo });
   log(`Intent classified as: ${intent}`);
 
-  // 5. Generate reply
-  const replyBody = await generateReply(openai, { intent, emailText, threadHistory, agentName, buyerInfo });
+  // 5. If specific_listing, identify and fetch full business details
+  let fullListing = null;
+  if (intent === 'specific_listing') {
+    try {
+      const businessName = await identifyListingName(openai, { emailText, threadHistory, agentName });
+      if (businessName) {
+        const business = await getBusinessByName(businessName);
+        fullListing = formatFullListing(business);
+        log(`Fetched full listing for "${businessName}"`);
+      }
+    } catch (err) {
+      log(`Failed to fetch full listing (non-fatal): ${err.message}`);
+    }
+  }
 
-  // 6. If criteria update, extract and persist
+  // 5b. Generate reply
+  const replyBody = await generateReply(openai, { intent, emailText, threadHistory, agentName, buyerInfo, fullListing });
+
+  // 6. If criteria_update, extract and persist
   if (intent === 'criteria_update') {
     try {
       const updates = await extractCriteriaUpdates(openai, emailText);
