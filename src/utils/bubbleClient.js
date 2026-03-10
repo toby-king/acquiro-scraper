@@ -644,6 +644,24 @@ export async function approveAcknowledgment(outreachId) {
   if (!res.ok) throw new Error(`Bubble approveAcknowledgment returned HTTP ${res.status}`);
 }
 
+export async function storeIMDetails(outreachId, { imUrl, imPassword }) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const body = { status_text: 'im_received', im_url_text: imUrl };
+  if (imPassword) body.im_password_text = imPassword;
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/LangcliffeOutreach/${outreachId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Bubble storeIMDetails returned HTTP ${res.status}: ${text}`);
+  }
+}
+
 export async function storeSignedNDA(outreachId, signedNdaFileUrl) {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');

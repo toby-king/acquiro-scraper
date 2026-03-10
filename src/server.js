@@ -33,11 +33,11 @@ import { RightbizScraper } from './scrapers/rightbiz.js';
 import { CoGoGoScraper } from './scrapers/cogogo.js';
 import { DaltonsScraper } from './scrapers/daltons.js';
 import { BusinessesForSaleScraper } from './scrapers/businessesforsale.js';
-import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId, deleteOutreach, getOutreachByContact, getMostRecentSentOutreach, uploadFileToBubble, updateOutreachNDA, createUserNotification, storeSignedNDA, getLangcliffeOutreach, setUserLangcliffeConnected } from './utils/bubbleClient.js';
+import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId, deleteOutreach, getOutreachByContact, getMostRecentSentOutreach, uploadFileToBubble, updateOutreachNDA, createUserNotification, storeSignedNDA, getLangcliffeOutreach, setUserLangcliffeConnected, storeIMDetails } from './utils/bubbleClient.js';
 import { generateMatchesForUser } from './utils/matcher.js';
 import { processAndIndexListing } from './utils/indexer.js';
 import { parseLangcliffeEmail } from './utils/langcliffeParser.js';
-import { processLangcliffeListings, sendApprovedOutreach, rewriteOutreachDraft, handleLangcliffeReply, sendApprovedReply, rewriteReplyDraft, handleNDAReceived, sendApprovedAcknowledgment, sendApprovedNDAReturn, generateAndQueueNDAReturn } from './utils/langcliffeResponder.js';
+import { processLangcliffeListings, sendApprovedOutreach, rewriteOutreachDraft, handleLangcliffeReply, sendApprovedReply, rewriteReplyDraft, handleNDAReceived, sendApprovedAcknowledgment, sendApprovedNDAReturn, generateAndQueueNDAReturn, handleIMReceived, detectIM } from './utils/langcliffeResponder.js';
 import { runArchiver } from './archiver.js';
 import { runEmailNotifications, sendEmailForUser } from './utils/emailNotifier.js';
 
@@ -687,6 +687,17 @@ const server = createServer(async (req, res) => {
               await handleNDAReceived({ outreach, inboundMessage: emailText, pdfBuffer: attachmentEntry.buffer, pdfFilename: attachmentEntry.filename, userId });
             } catch (err) {
               console.error(`[webhook] handleNDAReceived failed: ${err.message}`);
+            }
+          } else if (detectIM(emailText)) {
+            console.log(`[webhook] IM detected for outreach ${outreach._id}`);
+            try {
+              const handled = await handleIMReceived({ outreach, inboundMessage: emailText, userId });
+              if (!handled) {
+                // URL extraction failed — fall through to regular reply
+                await handleLangcliffeReply({ outreach, inboundMessage: emailText, userId });
+              }
+            } catch (err) {
+              console.error(`[webhook] handleIMReceived failed: ${err.message}`);
             }
           } else {
             try {

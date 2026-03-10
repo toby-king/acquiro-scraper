@@ -696,6 +696,133 @@ Sign off as: ${agentName} | ${agentEmail}`;
   return completion.choices[0].message.content.trim();
 }
 
+// ── IM (Information Memorandum) handling ──────────────────────────────────────
+
+/**
+ * Returns true if the email looks like an IM delivery — contains a URL,
+ * mentions "IM" or "information memorandum", and includes a password.
+ */
+export function detectIM(emailText) {
+  if (!emailText) return false;
+  const lower = emailText.toLowerCase();
+  const hasImMention = lower.includes('information memorandum') || /\bim\b/.test(lower);
+  const hasUrl       = /https?:\/\/\S+/.test(emailText);
+  const hasPassword  = lower.includes('password');
+  return hasImMention && hasUrl && hasPassword;
+}
+
+/**
+ * Extract the IM URL and password from the email body.
+ */
+function extractIMDetails(emailText) {
+  const urlMatch = emailText.match(/https?:\/\/[^\s)>]+/);
+  const url = urlMatch ? urlMatch[0].replace(/[.,;]$/, '') : null;
+
+  // Matches: "password is: abc123", "password to access the IM is: abc123", "The password is abc123"
+  const passwordMatch = emailText.match(/password[^:\n]*[:\s]+([^\s\n]{4,})/i);
+  const password = passwordMatch ? passwordMatch[1].replace(/[.,;]$/, '') : null;
+
+  return { url, password };
+}
+
+async function generateIMUserEmail({ outreach, agentName, agentEmail, imUrl, imPassword, buyerProfile }) {
+  const openai        = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const listingRef    = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
+  const businessName  = outreach.business_name_text ?? 'a business opportunity';
+  const companyOverview = getField(buyerProfile, 'company_overview_text') ?? '';
+
+  const prompt = `You are ${agentName}, an AI acquisition advisor. Write a short, exciting update email to your client.
+
+The Information Memorandum (IM) for a business they've been pursuing has just arrived.
+
+Business: ${businessName} (Ref ${listingRef})
+IM access link: ${imUrl}
+IM password: ${imPassword ?? '(see dashboard)'}
+Their acquisition focus: ${companyOverview || 'UK business acquisitions'}
+
+The email should:
+1. Open with the exciting news that the IM has arrived for ${businessName}
+2. Remind them briefly of the journey so far (expressed interest, signed the NDA, now the IM is here)
+3. Give them the link and password clearly so they can access it immediately
+4. Encourage them to review it and come back with questions — you're here to help them evaluate it
+5. Warm sign-off as their advisor
+
+Under 200 words. Plain text only, no markdown. No subject line.
+Sign off as: ${agentName} | ${agentEmail}`;
+
+  const completion = await openai.chat.completions.create({
+    model:       'gpt-4o-mini',
+    messages:    [{ role: 'user', content: prompt }],
+    temperature: 0.5,
+  });
+
+  return completion.choices[0].message.content.trim();
+}
+
+/**
+ * Called when a Langcliffe email is detected as an IM delivery.
+ * Stores the IM URL + password, notifies the user, no admin approval needed.
+ */
+export async function handleIMReceived({ outreach, inboundMessage, userId }) {
+  const { url: imUrl, password: imPassword } = extractIMDetails(inboundMessage);
+
+  if (!imUrl) {
+    console.warn(`[langcliffe] detectIM triggered but no URL extracted from email — treating as regular reply`);
+    return false; // signal caller to fall through to handleLangcliffeReply
+  }
+
+  const agent      = await getAgentForUser(userId);
+  const agentName  = agent?.name_text ?? agent?.name ?? 'Your Agent';
+  const agentEmail = agent?.email_text ?? 'agent@acquiro.ai';
+
+  // Store IM details on the outreach record and update status
+  await storeIMDetails(outreach._id, { imUrl, imPassword });
+  console.log(`[langcliffe] IM received for outreach ${outreach._id} — url: ${imUrl}`);
+
+  // Auto-send user notification email
+  const profileRes  = await getBuyerInfo(userId);
+  const profile     = profileRes?.results?.[0] ?? {};
+  const userDetails = await getUserDetails(userId);
+  const userEmail   = userDetails?.email ?? null;
+
+  if (userEmail) {
+    try {
+      const emailBody = await generateIMUserEmail({
+        outreach, agentName, agentEmail, imUrl, imPassword, buyerProfile: profile,
+      });
+      const testRecipient   = process.env.LANGCLIFFE_TEST_RECIPIENT;
+      const notifyRecipient = testRecipient || userEmail;
+      await sendViaSendGrid({
+        from:     agentEmail,
+        fromName: agentDisplayName(agent?.name_text ?? agent?.name ?? 'agent'),
+        to:       notifyRecipient,
+        subject:  `${agentName} — The IM for ${outreach.business_name_text ?? 'your opportunity'} has arrived`,
+        body:     emailBody,
+      });
+      console.log(`[langcliffe] IM notification email sent to ${notifyRecipient}`);
+    } catch (err) {
+      console.error(`[langcliffe] Failed to send IM notification email: ${err.message}`);
+    }
+  }
+
+  // Create dashboard notification
+  try {
+    const listingRef = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
+    const passwordLine = imPassword ? `\nPassword: ${imPassword}` : '';
+    await createUserNotification({
+      userId,
+      type:       'im_received',
+      title:      `IM available — ${outreach.business_name_text ?? 'Acquisition opportunity'}`,
+      body:       `The Information Memorandum for Ref ${listingRef} is ready to review.\n\nLink: ${imUrl}${passwordLine}`,
+      outreachId: outreach._id,
+    });
+  } catch (err) {
+    console.error(`[langcliffe] Failed to create IM UserNotification: ${err.message}`);
+  }
+
+  return true; // handled
+}
+
 export async function handleNDAReceived({ outreach, inboundMessage, pdfBuffer, pdfFilename, userId }) {
   const agent      = await getAgentForUser(userId);
   const agentName  = agent?.name_text ?? agent?.name ?? 'Your Agent';
