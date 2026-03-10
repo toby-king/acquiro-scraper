@@ -317,6 +317,92 @@ export async function createEmailRecord({ body, threadId, userId }) {
   return res.json();
 }
 
+export async function getEmailRecordByThreadId(threadId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'thread_id_text', constraint_type: 'equals', value: threadId },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/Emails?constraints=${encodeURIComponent(constraints)}&limit=1`;
+
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getEmailRecordByThreadId returned HTTP ${res.status}`);
+  const json = await res.json();
+  const record = json.response?.results?.[0] ?? null;
+  if (!record) return null;
+  return { userId: record.user_user, _id: record._id };
+}
+
+export async function getEmailThreadForUser(userId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'user_user', constraint_type: 'equals', value: userId },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/Emails?constraints=${encodeURIComponent(constraints)}&sort_field=Created Date&descending=false&limit=100`;
+
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getEmailThreadForUser returned HTTP ${res.status}`);
+  const json = await res.json();
+  const results = json.response?.results ?? [];
+  return results.map((r) => ({ body: r.body_text ?? '', is_agent: r.is_agent_boolean ?? false }));
+}
+
+export async function saveInboundEmailRecord({ body, threadId, userId }) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/Emails`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      body_text: body,
+      is_agent_boolean: false,
+      thread_id_text: threadId,
+      user_user: userId,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Bubble saveInboundEmailRecord returned HTTP ${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
+export async function updateBuyerCriteria(userId, updates) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  // First get the BuyerInfo record ID for this user
+  const constraints = JSON.stringify([
+    { key: 'user_user', constraint_type: 'equals', value: userId },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/Buyer_Info?constraints=${encodeURIComponent(constraints)}&sort_field=Created Date&descending=true&limit=1`;
+  const getRes = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!getRes.ok) throw new Error(`Bubble updateBuyerCriteria (get) returned HTTP ${getRes.status}`);
+  const getJson = await getRes.json();
+  const record = getJson.response?.results?.[0];
+  if (!record) throw new Error(`No BuyerInfo record found for user ${userId}`);
+
+  const patchRes = await fetch(`${BUBBLE_BASE}/obj/Buyer_Info/${record._id}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(updates),
+  });
+  if (!patchRes.ok) {
+    const text = await patchRes.text();
+    throw new Error(`Bubble updateBuyerCriteria (patch) returned HTTP ${patchRes.status}: ${text}`);
+  }
+}
+
 export async function getAgentByEmail(agentEmail) {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');

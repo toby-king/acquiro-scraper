@@ -6,7 +6,7 @@
  *   2. If none, fall back to top 5 non-dismissed matches.
  *   3. Fetch business details for each match.
  *   4. Generate a personalised HTML email via OpenAI.
- *   5. POST to Zapier webhook (sends the email).
+ *   5. Send via SendGrid directly.
  *   6. Write an Email record to Bubble.
  */
 
@@ -22,7 +22,11 @@ import {
   createEmailRecord,
 } from './bubbleClient.js';
 
-const ZAPIER_WEBHOOK = process.env.ZAPIER_WEBHOOK_URL;
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
+
+function sanitizeAgentEmail(agentName) {
+  return agentName.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
 
 function log(msg) {
   console.log(`[EmailNotifier] ${msg}`);
@@ -144,29 +148,40 @@ export async function sendEmailForUser(userId) {
   // 6. Generate email body
   const emailBody = await generateEmailBody({ agentName, userName, matches: formattedMatches, isNewMatches });
 
-  // 7. POST to Zapier
+  // 7. Send via SendGrid
   const userHash = parseInt(createHash('sha256').update(userId).digest('hex').slice(0, 8), 16).toString(36);
   const day = Math.floor(Date.now() / 86400000).toString(36);
   const threadId = `${userHash}-${day}`;
 
-  if (!ZAPIER_WEBHOOK) throw new Error('ZAPIER_WEBHOOK_URL env var is not set');
+  if (!SENDGRID_API_KEY) throw new Error('SENDGRID_API_KEY env var is not set');
 
-  const zapierRes = await fetch(ZAPIER_WEBHOOK, {
+  const sanitizedName = sanitizeAgentEmail(agentName);
+  const fromAddress = `${sanitizedName}@acquiro-agent.com`;
+  const subject = isNewMatches
+    ? `You have new acquisition opportunities | Ref:${threadId}`
+    : `Your acquisition pipeline update | Ref:${threadId}`;
+
+  const sgRes = await fetch('https://api.sendgrid.com/v3/mail/send', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${SENDGRID_API_KEY}`,
+    },
     body: JSON.stringify({
-      body: emailBody,
-      agent_name: agentName,
-      user_email: email,
-      thread_id: threadId,
+      personalizations: [{ to: [{ email }] }],
+      from: { email: fromAddress, name: agentName },
+      reply_to: { email: fromAddress, name: agentName },
+      subject,
+      content: [{ type: 'text/html', value: emailBody }],
     }),
   });
 
-  if (!zapierRes.ok) {
-    throw new Error(`Zapier webhook returned HTTP ${zapierRes.status}`);
+  if (!sgRes.ok) {
+    const errText = await sgRes.text().catch(() => '');
+    throw new Error(`SendGrid returned HTTP ${sgRes.status}: ${errText.substring(0, 200)}`);
   }
 
-  log(`Email sent via Zapier for user=${userId} (${isNewMatches ? matchRecords.length + ' new matches' : 'top matches reminder'})`);
+  log(`Email sent via SendGrid for user=${userId} from=${fromAddress} (${isNewMatches ? matchRecords.length + ' new matches' : 'top matches reminder'})`);
 
   // 8. Create Email record in Bubble
   await createEmailRecord({ body: emailBody, threadId, userId });

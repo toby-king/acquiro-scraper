@@ -38,6 +38,7 @@ import { generateMatchesForUser } from './utils/matcher.js';
 import { processAndIndexListing } from './utils/indexer.js';
 import { parseLangcliffeEmail } from './utils/langcliffeParser.js';
 import { processLangcliffeListings, sendApprovedOutreach, rewriteOutreachDraft, handleLangcliffeReply, sendApprovedReply, rewriteReplyDraft, handleNDAReceived, sendApprovedAcknowledgment, sendApprovedNDAReturn, generateAndQueueNDAReturn, handleIMReceived, detectIM } from './utils/langcliffeResponder.js';
+import { handleUserReply } from './utils/userReplyHandler.js';
 import { runArchiver } from './archiver.js';
 import { runEmailNotifications, sendEmailForUser } from './utils/emailNotifier.js';
 
@@ -606,6 +607,23 @@ const server = createServer(async (req, res) => {
       }
 
       console.log(`[webhook] Inbound email to: ${toEmail}`);
+
+      // ── User reply routing (match digest thread) ─────────────────────────
+      // Subject contains Ref:{threadId} appended by emailNotifier.
+      // Guard: Langcliffe teasers also contain "Ref:" in their subjects —
+      // exclude them by checking the body doesn't contain the Langcliffe domain.
+      const subject = fields.subject ?? '';
+      const refMatch = subject.match(/Ref:(\S+)/i);
+      if (refMatch && !emailText.includes('langcliffeinternational.com')) {
+        const threadId = refMatch[1];
+        console.log(`[webhook] Matched user reply thread: ${threadId}`);
+        try {
+          await handleUserReply({ threadId, fromEmail, emailText, toAgentEmail: toEmail, subject });
+        } catch (err) {
+          console.error(`[webhook] handleUserReply failed: ${err.message}`);
+        }
+        return; // skip Langcliffe processing
+      }
 
       // Look up the agent by their email address
       let agent;
