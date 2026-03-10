@@ -81,8 +81,8 @@ export async function getStaleListings(cursor = 0) {
 
   const staleThreshold = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString();
   const constraints = JSON.stringify([
-    { key: 'archived',     constraint_type: 'equals',    value: false },
-    { key: 'last_seen_at', constraint_type: 'less than', value: staleThreshold },
+    { key: 'archived_boolean',  constraint_type: 'equals',    value: false },
+    { key: 'last_seen_at_date', constraint_type: 'less than', value: staleThreshold },
   ]);
   const url = `${BUBBLE_BASE}/obj/Business?constraints=${encodeURIComponent(constraints)}&limit=100&cursor=${cursor}`;
 
@@ -105,7 +105,7 @@ export async function archiveListing(bubbleId) {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({ archived: true }),
+    body: JSON.stringify({ archived_boolean: true }),
   });
 
   if (!res.ok) throw new Error(`Bubble archiveListing returned HTTP ${res.status}`);
@@ -122,7 +122,7 @@ export async function touchListing(bubbleId) {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({ last_seen_at_date: now, last_verified_at_date: now }),
+    body: JSON.stringify({ last_seen_at_date: now, last_verified_at_date: now, archived_boolean: false }),
   });
 
   if (!res.ok) throw new Error(`Bubble touchListing returned HTTP ${res.status}`);
@@ -287,7 +287,7 @@ export async function getTopMatchesForUser(userId, limit = 5) {
 
   const constraints = JSON.stringify([
     { key: 'user_user', constraint_type: 'equals', value: userId },
-    { key: 'dismissed', constraint_type: 'equals', value: false },
+    { key: 'dismissed_boolean', constraint_type: 'not equal', value: true },
   ]);
   const url = `${BUBBLE_BASE}/obj/matches?constraints=${encodeURIComponent(constraints)}&sort_field=score_number&descending=true&limit=${limit}`;
 
@@ -303,7 +303,7 @@ export async function getBusinessByName(name) {
 
   const constraints = JSON.stringify([
     { key: 'business_name_text', constraint_type: 'contains', value: name },
-    { key: 'archived', constraint_type: 'equals', value: false },
+    { key: 'archived_boolean', constraint_type: 'equals', value: false },
   ]);
   const url = `${BUBBLE_BASE}/obj/Business?constraints=${encodeURIComponent(constraints)}&limit=1`;
 
