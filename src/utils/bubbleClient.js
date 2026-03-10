@@ -1,33 +1,49 @@
 const BUBBLE_BASE = 'https://toby-85612.bubbleapps.io/version-test/api/1.1';
-const ENDPOINT = `${BUBBLE_BASE}/wf/insert_listing`;
 
 export async function insertListing(listing) {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
 
-  console.log(`[bubble] insertListing → ${ENDPOINT} listing_id=${listing.listing_id}`);
-  const res = await fetch(ENDPOINT, {
+  // Map scraper field names → Bubble Data API field names
+  const body = {};
+  if (listing.listing_id)    body.listing_id_text      = listing.listing_id;
+  if (listing.business_name) body.business_name_text   = listing.business_name;
+  if (listing.description)   body.description_text     = listing.description;
+  if (listing.location)      body.location_text        = listing.location;
+  if (listing.region)        body.region_text          = listing.region;
+  if (listing.sector)        body.sector1_text         = listing.sector;
+  if (listing.url)           body.url_text             = listing.url;
+  if (listing.image)         body.image_image          = listing.image;
+  if (listing.asking_price != null) body.asking_price_number = listing.asking_price;
+  if (listing.turnover     != null) body.turnover_number     = listing.turnover;
+  if (listing.net_profit   != null) body.net_profit_number   = listing.net_profit;
+  if (listing.rent         != null) body.rent_number         = listing.rent;
+  if (listing.leasehold    != null) body.leasehold_number    = listing.leasehold;
+  body.last_seen_at_date = new Date().toISOString();
+  body.archived_boolean  = false;
+
+  const endpoint = `${BUBBLE_BASE}/obj/Business`;
+  console.log(`[bubble] insertListing → ${endpoint} listing_id=${listing.listing_id}`);
+
+  const res = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
     },
-    body: JSON.stringify(listing),
+    body: JSON.stringify(body),
   });
 
   console.log(`[bubble] insertListing response status=${res.status}`);
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
-    throw new Error(`Bubble insert_listing returned HTTP ${res.status}: ${errText.substring(0, 200)}`);
+    throw new Error(`Bubble insertListing returned HTTP ${res.status}: ${errText.substring(0, 200)}`);
   }
-  const insertText = await res.text();
-  console.log(`[bubble] insertListing body="${insertText.substring(0, 200)}"`);
-  if (!insertText.trim()) throw new Error('Bubble insert_listing returned empty response body (status ' + res.status + ')');
-  try {
-    return JSON.parse(insertText);
-  } catch (e) {
-    throw new Error(`Bubble insert_listing JSON parse failed. Body: ${insertText.substring(0, 200)}`);
-  }
+
+  // Data API POST returns { status: 'ok', id: '...' }
+  // Indexer expects { response: { _id } } — remap so callers don't need to change
+  const data = await res.json();
+  return { response: { _id: data.id } };
 }
 
 export async function checkListingExists(listing_id) {
