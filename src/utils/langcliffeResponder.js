@@ -654,7 +654,7 @@ Under 80 words. Plain text only. No subject line.`;
  * Called when a Langcliffe reply has a PDF attachment — treat as NDA.
  * Uploads the PDF to Bubble, generates acknowledgment draft, notifies user.
  */
-async function generateUserNDAEmail({ outreach, inboundMessage, agentName, agentEmail, buyerProfile, userName }) {
+async function generateUserNDAEmail({ outreach, inboundMessage, agentName, agentEmail, buyerProfile, userName, agentPersonality, agentTraits, agentStyle, agentType }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const listingRef        = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
@@ -673,7 +673,18 @@ async function generateUserNDAEmail({ outreach, inboundMessage, agentName, agent
   const contextBlock = contextParts.join('\n\n---\n\n');
 
   const addressee = userName ? userName.split(' ')[0] : 'there';
+
+  const personalityParts = [];
+  if (agentPersonality) personalityParts.push(`Personality: ${agentPersonality}`);
+  if (agentTraits)      personalityParts.push(`Traits: ${agentTraits}`);
+  if (agentStyle)       personalityParts.push(`Communication style: ${agentStyle}`);
+  if (agentType)        personalityParts.push(`Advisor type: ${agentType}`);
+  const personalityBlock = personalityParts.length > 0
+    ? `\nYour advisor persona:\n${personalityParts.join('\n')}\n`
+    : '';
+
   const prompt = `You are ${agentName}, an AI acquisition advisor at Acquiro. You have been quietly working on behalf of ${userName ?? 'a client'} — they set up their acquisition criteria and trusted you to act on their behalf. They don't yet know about this specific opportunity.
+${personalityBlock}
 
 You need to write them an email that:
 1. Introduces yourself and briefly reminds them that you've been working on their behalf (they set their criteria and you've been actively pursuing matches for them)
@@ -862,7 +873,11 @@ export async function handleNDAReceived({ outreach, inboundMessage, pdfBuffer, p
 
   if (userEmail) {
     try {
-      const userName = userDetails?.name_text ?? null;
+      const userName       = userDetails?.name_text ?? null;
+      const agentPersonality = agent?.personality_options_option_personalityoptions ?? null;
+      const agentTraits    = agent?.traits_text ?? null;
+      const agentStyle     = agent?.style_text ?? null;
+      const agentType      = agent?.type_text ?? null;
       const emailBody = await generateUserNDAEmail({
         outreach,
         inboundMessage,
@@ -870,6 +885,10 @@ export async function handleNDAReceived({ outreach, inboundMessage, pdfBuffer, p
         agentEmail,
         buyerProfile: profile ?? {},
         userName,
+        agentPersonality,
+        agentTraits,
+        agentStyle,
+        agentType,
       });
 
       // Encode outreach ID in subject so a reply with attached signed NDA is auto-detected
