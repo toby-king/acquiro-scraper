@@ -94,7 +94,7 @@ function generateMessageId(fromDomain = 'acquiro-agent.com') {
   return `<${ts}.${rnd}@${fromDomain}>`;
 }
 
-async function sendViaSendGrid({ from, fromName, to, subject, body, messageId = null, inReplyTo = null }) {
+async function sendViaSendGrid({ from, fromName, to, subject, body, messageId = null, inReplyTo = null, attachments = null }) {
   const apiKey = process.env.SENDGRID_API_KEY;
   if (!apiKey) throw new Error('SENDGRID_API_KEY env var is not set');
 
@@ -104,6 +104,10 @@ async function sendViaSendGrid({ from, fromName, to, subject, body, messageId = 
     subject,
     content: [{ type: 'text/plain', value: body }],
   };
+
+  if (attachments && attachments.length > 0) {
+    payload.attachments = attachments;
+  }
 
   // Add threading headers when available
   const extraHeaders = {};
@@ -650,7 +654,7 @@ Under 80 words. Plain text only. No subject line.`;
  * Called when a Langcliffe reply has a PDF attachment — treat as NDA.
  * Uploads the PDF to Bubble, generates acknowledgment draft, notifies user.
  */
-async function generateUserNDAEmail({ outreach, inboundMessage, agentName, agentEmail, buyerProfile }) {
+async function generateUserNDAEmail({ outreach, inboundMessage, agentName, agentEmail, buyerProfile, userName }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const listingRef        = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
@@ -668,7 +672,8 @@ async function generateUserNDAEmail({ outreach, inboundMessage, agentName, agent
   if (inboundMessage) contextParts.push(`Email accompanying the NDA:\n${inboundMessage}`);
   const contextBlock = contextParts.join('\n\n---\n\n');
 
-  const prompt = `You are ${agentName}, an AI acquisition advisor at Acquiro. You have been quietly working on behalf of a client — they set up their acquisition criteria and trusted you to act on their behalf. They don't yet know about this specific opportunity.
+  const addressee = userName ? userName.split(' ')[0] : 'there';
+  const prompt = `You are ${agentName}, an AI acquisition advisor at Acquiro. You have been quietly working on behalf of ${userName ?? 'a client'} — they set up their acquisition criteria and trusted you to act on their behalf. They don't yet know about this specific opportunity.
 
 You need to write them an email that:
 1. Introduces yourself and briefly reminds them that you've been working on their behalf (they set their criteria and you've been actively pursuing matches for them)
@@ -678,6 +683,7 @@ You need to write them an email that:
 5. Explains clearly that to move forward and receive the full Information Memorandum (IM), they need to sign an NDA — and that it's ready and waiting for them on their Acquiro dashboard
 6. Ends with a warm, confident sign-off as their advisor
 
+Address the user as: ${addressee}
 Tone: warm but professional. Like a trusted advisor giving an exciting update. Concise — under 250 words. Plain text only, no markdown. No subject line.
 
 Their acquisition focus: ${companyOverview || 'UK business acquisitions'}
@@ -856,24 +862,33 @@ export async function handleNDAReceived({ outreach, inboundMessage, pdfBuffer, p
 
   if (userEmail) {
     try {
+      const userName = userDetails?.name_text ?? null;
       const emailBody = await generateUserNDAEmail({
         outreach,
         inboundMessage,
         agentName,
         agentEmail,
         buyerProfile: profile ?? {},
+        userName,
       });
 
-      const testRecipient = process.env.LANGCLIFFE_TEST_RECIPIENT;
-      const notifyRecipient = testRecipient || userEmail;
+      // Encode outreach ID in subject so a reply with attached signed NDA is auto-detected
+      const ndaAttachment = pdfBuffer ? [{
+        content:     pdfBuffer.toString('base64'),
+        filename:    pdfFilename ?? 'nda.pdf',
+        type:        'application/pdf',
+        disposition: 'attachment',
+      }] : null;
+
       await sendViaSendGrid({
-        from:     agentEmail,
-        fromName: agentDisplayName(agentName.replace(' @ Acquiro', '')),
-        to:       notifyRecipient,
-        subject:  `${agentName} — An acquisition opportunity needs your attention`,
-        body:     emailBody,
+        from:        agentEmail,
+        fromName:    agentDisplayName(agentName.replace(' @ Acquiro', '')),
+        to:          userEmail,
+        subject:     `${agentName} — An acquisition opportunity needs your attention Ref:nda_${outreach._id}`,
+        body:        emailBody,
+        attachments: ndaAttachment,
       });
-      console.log(`[langcliffe] User notification email sent to ${notifyRecipient}${testRecipient ? ' (test override)' : ''}`);
+      console.log(`[langcliffe] User notification email sent to ${userEmail}`);
     } catch (err) {
       console.error(`[langcliffe] Failed to send user notification email: ${err.message}`);
     }

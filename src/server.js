@@ -616,6 +616,29 @@ const server = createServer(async (req, res) => {
       const refMatch = subject.match(/Ref:(\S+)/i);
       if (refMatch && !emailText.includes('langcliffeinternational.com')) {
         const threadId = refMatch[1];
+
+        // Signed NDA returned via email reply
+        if (threadId.startsWith('nda_')) {
+          const outreachId = threadId.slice(4);
+          const pdfEntry = Object.values(files).find(
+            (f) => f.mimeType === 'application/pdf' || f.filename?.toLowerCase().endsWith('.pdf'),
+          );
+          if (pdfEntry) {
+            console.log(`[webhook] Signed NDA received via email reply for outreach ${outreachId}`);
+            try {
+              const fileUrl = await uploadFileToBubble(pdfEntry.buffer, pdfEntry.filename, pdfEntry.mimeType);
+              await storeSignedNDA(outreachId, fileUrl);
+              const outreach = await getLangcliffeOutreach(outreachId);
+              if (outreach) await generateAndQueueNDAReturn(outreach);
+            } catch (err) {
+              console.error(`[webhook] Signed NDA email processing failed: ${err.message}`);
+            }
+          } else {
+            console.log(`[webhook] NDA reply received for outreach ${outreachId} but no PDF attached — ignoring`);
+          }
+          return;
+        }
+
         console.log(`[webhook] Matched user reply thread: ${threadId}`);
         try {
           await handleUserReply({ threadId, fromEmail, emailText, toAgentEmail: toEmail, subject });
