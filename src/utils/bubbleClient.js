@@ -541,12 +541,26 @@ export async function getPendingOutreachQueue() {
   const [pendingJson, replyJson, ndaReceivedJson, ndaSignedJson] = await Promise.all([
     pendingRes.json(), replyRes.json(), ndaReceivedRes.json(), ndaSignedRes.json(),
   ]);
-  return [
+  const results = [
     ...(pendingJson.response?.results ?? []),
     ...(replyJson.response?.results ?? []),
     ...(ndaReceivedJson.response?.results ?? []),
     ...(ndaSignedJson.response?.results ?? []),
   ];
+
+  // Enrich each record with the user's email address for the admin UI
+  const userIds = [...new Set(results.map((r) => r.user_user).filter(Boolean))];
+  const userEmails = {};
+  await Promise.all(userIds.map(async (uid) => {
+    try {
+      const user = await getUserDetails(uid);
+      userEmails[uid] = user?.authentication?.email?.email ?? null;
+    } catch {
+      userEmails[uid] = null;
+    }
+  }));
+
+  return results.map((r) => ({ ...r, user_email_text: userEmails[r.user_user] ?? null }));
 }
 
 export async function approveOutreach(outreachId, threadMessageId = null) {

@@ -678,7 +678,8 @@ const server = createServer(async (req, res) => {
             const testRecipient = process.env.LANGCLIFFE_TEST_RECIPIENT?.toLowerCase().trim();
             const isConfiguredContact = configuredContactEmail && fromEmail === configuredContactEmail;
             const isTestSender = testRecipient && fromEmail === testRecipient;
-            if (isConfiguredContact || isTestSender) {
+            const isLangcliffeDomain = fromEmail.endsWith('@langcliffeinternational.com');
+            if (isConfiguredContact || isTestSender || isLangcliffeDomain) {
               console.log(`[webhook] Contact email not matched exactly — falling back to most recent outreach for user ${userId} (from: ${fromEmail})`);
               try {
                 outreach = await getMostRecentSentOutreach(userId);
