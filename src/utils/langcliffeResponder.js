@@ -635,9 +635,11 @@ async function generateNDAReturnBody({ outreach, agentName, agentEmail }) {
 Broker first name: ${contactFirstName}
 Business opportunity reference: ${ref}
 Business name: ${outreach.business_name_text ?? 'the business'}
-Agent signing off: ${agentName} | ${agentEmail}
 
-Content: Confirm the signed NDA is attached. Express that you look forward to reviewing the Information Memorandum. Professional sign-off.
+Content: Confirm the signed NDA is attached. Express that you look forward to reviewing the Information Memorandum.
+
+Sign off exactly as: ${agentName}
+Do not include any placeholder text such as [Your Name], [Your Position], [Your Company] etc. The sign-off is just the name above and nothing else.
 
 Under 80 words. Plain text only. No subject line.`;
 

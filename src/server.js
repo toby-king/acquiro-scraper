@@ -33,7 +33,7 @@ import { RightbizScraper } from './scrapers/rightbiz.js';
 import { CoGoGoScraper } from './scrapers/cogogo.js';
 import { DaltonsScraper } from './scrapers/daltons.js';
 import { BusinessesForSaleScraper } from './scrapers/businessesforsale.js';
-import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId, deleteOutreach, getOutreachByContact, getMostRecentSentOutreach, uploadFileToBubble, updateOutreachNDA, createUserNotification, storeSignedNDA, getLangcliffeOutreach, setUserLangcliffeConnected, storeIMDetails } from './utils/bubbleClient.js';
+import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId, deleteOutreach, getOutreachByContact, getMostRecentSentOutreach, uploadFileToBubble, updateOutreachNDA, createUserNotification, storeSignedNDA, getLangcliffeOutreach, setUserLangcliffeConnected, storeIMDetails, getExistingUserNotification, markNotificationActioned } from './utils/bubbleClient.js';
 import { generateMatchesForUser } from './utils/matcher.js';
 import { processAndIndexListing } from './utils/indexer.js';
 import { parseLangcliffeEmail } from './utils/langcliffeParser.js';
@@ -629,7 +629,12 @@ const server = createServer(async (req, res) => {
               const fileUrl = await uploadFileToBubble(pdfEntry.buffer, pdfEntry.filename, pdfEntry.mimeType);
               await storeSignedNDA(outreachId, fileUrl);
               const outreach = await getLangcliffeOutreach(outreachId);
-              if (outreach) await generateAndQueueNDAReturn(outreach);
+              if (outreach) {
+                await generateAndQueueNDAReturn(outreach);
+                // Mark the dashboard notification as actioned so it disappears
+                const notification = await getExistingUserNotification(outreach.user_user, outreachId);
+                if (notification) await markNotificationActioned(notification._id).catch(() => {});
+              }
             } catch (err) {
               console.error(`[webhook] Signed NDA email processing failed: ${err.message}`);
             }
