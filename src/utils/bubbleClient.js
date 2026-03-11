@@ -153,6 +153,42 @@ export async function getExistingMatches(userId) {
   return ids;
 }
 
+/**
+ * Returns dismissed matches that have a stored reason.
+ * Used by the feedback loop to adjust per-user scoring.
+ * @param {string} userId
+ * @returns {Promise<Array<{ businessId: string, reason: string }>>}
+ */
+export async function getDismissedMatchesWithReasons(userId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'user_user', constraint_type: 'equals', value: userId },
+    { key: 'dismissed_boolean', constraint_type: 'equals', value: true },
+  ]);
+
+  const results = [];
+  let cursor = 0;
+
+  while (true) {
+    const url = `${BUBBLE_BASE}/obj/matches?constraints=${encodeURIComponent(constraints)}&limit=100&cursor=${cursor}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+    if (!res.ok) throw new Error(`Bubble getDismissedMatchesWithReasons returned HTTP ${res.status}`);
+    const json = await res.json();
+    const { results: batch, remaining } = json.response;
+    for (const m of batch) {
+      if (m.dismiss_reason_text && m.business_custom_business) {
+        results.push({ businessId: m.business_custom_business, reason: m.dismiss_reason_text });
+      }
+    }
+    if (!remaining || remaining === 0) break;
+    cursor += batch.length;
+  }
+
+  return results;
+}
+
 export async function getBubbleIdByListingId(listing_id) {
   const apiKey = process.env.BUBBLE_API_KEY;
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');

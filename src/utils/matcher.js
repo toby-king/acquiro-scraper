@@ -5,7 +5,7 @@
 
 import OpenAI from 'openai';
 import { Pinecone } from '@pinecone-database/pinecone';
-import { getBuyerInfo, getExistingMatches } from './bubbleClient.js';
+import { getBuyerInfo, getExistingMatches, getDismissedMatchesWithReasons } from './bubbleClient.js';
 
 const BUBBLE_BASE = 'https://toby-85612.bubbleapps.io/version-test/api/1.1';
 
@@ -176,6 +176,51 @@ const MISSING_PENALTY   = 0.02;
 const LEEWAY            = 0.50;
 const SECTOR_BOOST      = 0.15;
 
+/**
+ * Analyse a user's dismissed-with-reason matches to produce per-user scoring adjustments.
+ *
+ * @param {Array<{ businessId: string, reason: string }>} dismissedMatches
+ * @param {import('@pinecone-database/pinecone').Index} pineconeIndex  Used to fetch sector metadata for wrong_sector dismissals
+ * @returns {Promise<{ priceMultiplier: number, feedbackExcludedSectors: string[] }>}
+ */
+export async function buildFeedbackAdjustments(dismissedMatches, pineconeIndex) {
+  const wrongPriceCount = dismissedMatches.filter((d) => d.reason === 'wrong_price').length;
+
+  const wrongSectorIds = [
+    ...new Set(
+      dismissedMatches
+        .filter((d) => d.reason === 'wrong_sector')
+        .map((d) => d.businessId)
+        .filter(Boolean),
+    ),
+  ];
+
+  // Only build sector exclusions once we have 2+ wrong_sector signals
+  let feedbackExcludedSectors = [];
+  if (wrongSectorIds.length >= 2) {
+    try {
+      const fetched = await pineconeIndex.fetch(wrongSectorIds);
+      const sectorCounts = {};
+      for (const record of Object.values(fetched.records ?? {})) {
+        for (const s of record.metadata?.normalised_sectors ?? []) {
+          sectorCounts[s] = (sectorCounts[s] ?? 0) + 1;
+        }
+      }
+      // Only exclude a sector if at least 2 dismissals hit it
+      feedbackExcludedSectors = Object.entries(sectorCounts)
+        .filter(([, count]) => count >= 2)
+        .map(([sector]) => sector);
+    } catch (err) {
+      console.warn('[feedback] Failed to fetch Pinecone metadata for sector exclusions:', err.message);
+    }
+  }
+
+  return {
+    priceMultiplier: wrongPriceCount >= 2 ? 0.8 : 1.0,
+    feedbackExcludedSectors,
+  };
+}
+
 export function scoreFinancials(meta, ebitda, turnover, maxPrice) {
   let adjustment = 0;
   const breakdown = {};
@@ -232,7 +277,7 @@ export async function generateMatchesForUser(userId) {
   const turnoverRaw = getField(p, 'turnover_range', 'turnover_range_text');
   const ebitda      = parseRange(ebitdaRaw);
   const turnover    = parseRange(turnoverRaw);
-  const maxPrice    = calcMaxPrice(p);
+  let maxPrice      = calcMaxPrice(p);
 
   // 3. Fetch existing matches (novelty filter)
   const seenIds = await getExistingMatches(userId);
@@ -251,10 +296,22 @@ export async function generateMatchesForUser(userId) {
   const topK = Math.min(Math.max(30, seenIds.length + 15), 100);
   const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
   const index = pinecone.index(process.env.PINECONE_INDEX_NAME);
-  const qRes = await index.query({
-    vector, topK, includeMetadata: true,
-    filter: { source: { '$ne': 'langcliffe' } },
-  });
+  const [qRes, dismissedMatches] = await Promise.all([
+    index.query({ vector, topK, includeMetadata: true, filter: { source: { '$ne': 'langcliffe' } } }),
+    getDismissedMatchesWithReasons(userId),
+  ]);
+
+  // 5a. Build per-user feedback adjustments
+  const { priceMultiplier, feedbackExcludedSectors } =
+    await buildFeedbackAdjustments(dismissedMatches, index);
+  if (priceMultiplier < 1) {
+    maxPrice = isFinite(maxPrice) ? maxPrice * priceMultiplier : maxPrice;
+    console.log(`[generate-matches] Feedback: price ceiling tightened by ${Math.round((1 - priceMultiplier) * 100)}% → ${maxPrice}`);
+  }
+  if (feedbackExcludedSectors.length > 0) {
+    console.log(`[generate-matches] Feedback: excluding sectors from dismissals: ${feedbackExcludedSectors.join(', ')}`);
+  }
+  const effectiveExcl = [...new Set([...excl, ...feedbackExcludedSectors])];
 
   // 6. Sector re-ranking
   const sectorKeywords = expandSectorKeywords(sectors);
@@ -276,13 +333,13 @@ export async function generateMatchesForUser(userId) {
   reranked.sort((a, b) => b.adjustedScore - a.adjustedScore);
 
   // 7. Apply novelty + exclusion + threshold filters, take top 5
-  const exclKeywords = expandSectorKeywords(excl);
+  const exclKeywords = expandSectorKeywords(effectiveExcl);
   const noveltyFiltered = reranked.filter((m) => !seenIds.includes(m.id));
   const exclFiltered = noveltyFiltered.filter((m) => {
-    if (excl.length === 0) return true;
+    if (effectiveExcl.length === 0) return true;
     const normalisedSectors = m.metadata?.normalised_sectors ?? [];
     if (normalisedSectors.length > 0) {
-      return !normalisedSectors.some((s) => excl.includes(s));
+      return !normalisedSectors.some((s) => effectiveExcl.includes(s));
     }
     const text = [m.metadata?.sector ?? '', m.metadata?.business_name ?? ''].join(' ').toLowerCase();
     return !exclKeywords.some((kw) => text.includes(kw));
