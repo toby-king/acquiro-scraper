@@ -961,3 +961,20 @@ export async function createMiscInboundRecord(userId, fromEmail, emailBody) {
     throw new Error(`Bubble createMiscInboundRecord returned HTTP ${res.status}: ${text}`);
   }
 }
+
+export async function getAdminUsers() {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = encodeURIComponent(JSON.stringify([
+    { key: 'is_admin_boolean', constraint_type: 'equals', value: true },
+  ]));
+  const res = await fetch(`${BUBBLE_BASE}/obj/user?constraints=${constraints}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  if (!res.ok) throw new Error(`Bubble getAdminUsers returned HTTP ${res.status}`);
+  const json = await res.json();
+  return (json.response?.results ?? [])
+    .map((u) => u?.authentication?.email?.email)
+    .filter(Boolean);
+}

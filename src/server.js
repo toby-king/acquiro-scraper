@@ -37,7 +37,7 @@ import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog
 import { generateMatchesForUser } from './utils/matcher.js';
 import { processAndIndexListing } from './utils/indexer.js';
 import { parseLangcliffeEmail } from './utils/langcliffeParser.js';
-import { processLangcliffeListings, sendApprovedOutreach, rewriteOutreachDraft, handleLangcliffeReply, sendApprovedReply, rewriteReplyDraft, handleNDAReceived, sendApprovedAcknowledgment, sendApprovedNDAReturn, generateAndQueueNDAReturn, handleIMReceived, detectIM } from './utils/langcliffeResponder.js';
+import { processLangcliffeListings, sendApprovedOutreach, rewriteOutreachDraft, handleLangcliffeReply, sendApprovedReply, rewriteReplyDraft, handleNDAReceived, sendApprovedAcknowledgment, sendApprovedNDAReturn, generateAndQueueNDAReturn, handleIMReceived, detectIM, notifyAdmins } from './utils/langcliffeResponder.js';
 import { handleUserReply } from './utils/userReplyHandler.js';
 import { runArchiver } from './archiver.js';
 import { runEmailNotifications, sendEmailForUser } from './utils/emailNotifier.js';
@@ -720,9 +720,12 @@ const server = createServer(async (req, res) => {
 
           if (!outreach) {
             console.log(`[webhook] No sent outreach found for contact ${fromEmail} — storing as misc`);
-            createMiscInboundRecord(userId, fromEmail, emailText).catch((err) =>
-              console.error(`[webhook] createMiscInboundRecord failed: ${err.message}`),
-            );
+            createMiscInboundRecord(userId, fromEmail, emailText)
+              .then(() => notifyAdmins(
+                `[Acquiro] Unmatched inbound email — ${fromEmail}`,
+                `An email arrived at an agent address but couldn't be matched to any outreach.\n\nFrom: ${fromEmail}\nFor user: ${userId}\n\nIt has been stored in the Misc section of the queue.`,
+              ))
+              .catch((err) => console.error(`[webhook] createMiscInboundRecord failed: ${err.message}`));
             return;
           }
 

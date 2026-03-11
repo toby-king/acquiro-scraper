@@ -21,6 +21,7 @@ import {
   getExistingUserNotification,
   updateUserNotification,
   uploadFileToBubble,
+  getAdminUsers,
 } from './bubbleClient.js';
 import {
   buildGoldenString,
@@ -32,6 +33,47 @@ import {
 } from './matcher.js';
 
 const SECTOR_BOOST      = 0.15;
+
+const ADMIN_FROM_EMAIL = 'admins@acquiro-agent.com';
+const ADMIN_DASHBOARD_URL = process.env.ADMIN_DASHBOARD_URL || 'https://acquiro.co.uk/dashboard';
+
+export async function notifyAdmins(subject, body) {
+  const apiKey = process.env.SENDGRID_API_KEY;
+  if (!apiKey) return; // non-fatal if not configured
+
+  let adminEmails;
+  try {
+    adminEmails = await getAdminUsers();
+  } catch (err) {
+    console.warn(`[notifyAdmins] Failed to fetch admin users: ${err.message}`);
+    return;
+  }
+
+  if (!adminEmails.length) return;
+
+  const fullBody = `${body}\n\nView queue: ${ADMIN_DASHBOARD_URL}`;
+
+  await Promise.all(adminEmails.map(async (email) => {
+    try {
+      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email }] }],
+          from: { email: ADMIN_FROM_EMAIL, name: 'Acquiro Admin' },
+          subject,
+          content: [{ type: 'text/plain', value: fullBody }],
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        console.warn(`[notifyAdmins] SendGrid error for ${email}: ${res.status} ${text.substring(0, 100)}`);
+      }
+    } catch (err) {
+      console.warn(`[notifyAdmins] Failed to send to ${email}: ${err.message}`);
+    }
+  }));
+}
 const SCORE_THRESHOLD   = 0.50;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -315,6 +357,10 @@ export async function processLangcliffeListings({ userId, listingsWithBubbleIds,
         inboundEmail,
       });
       console.log(`[langcliffe] Outreach draft created (id=${outreachId}) for listing ${listingId} — awaiting admin approval`);
+      notifyAdmins(
+        `[Acquiro] New outreach draft — ${listing.business_name ?? listingId}`,
+        `A new outreach draft is awaiting your approval.\n\nBusiness: ${listing.business_name ?? listingId}\nRef: ${listingId.replace('langcliffe_', '')}\nFor user: ${userId}`,
+      ).catch(() => {});
     } catch (err) {
       console.error(`[langcliffe] Failed to save outreach draft for ${listingId}: ${err.message}`);
     }
@@ -430,6 +476,10 @@ export async function handleLangcliffeReply({ outreach, inboundMessage, userId }
   });
 
   console.log(`[langcliffe] Reply draft queued for outreach ${outreach._id} — awaiting admin approval`);
+  notifyAdmins(
+    `[Acquiro] Langcliffe reply — ${outreach.business_name_text ?? outreach._id}`,
+    `Langcliffe has replied and a response draft is awaiting your approval.\n\nBusiness: ${outreach.business_name_text ?? 'Unknown'}\nFrom: ${outreach.langcliffe_contact_text ?? 'Unknown'}`,
+  ).catch(() => {});
 }
 
 /**
@@ -865,6 +915,10 @@ export async function handleNDAReceived({ outreach, inboundMessage, pdfBuffer, p
   // Update outreach record
   await updateOutreachNDA({ outreachId: outreach._id, ndaFileUrl, replyBody: inboundMessage, ackDraft });
   console.log(`[langcliffe] NDA received for outreach ${outreach._id} — acknowledgment queued`);
+  notifyAdmins(
+    `[Acquiro] NDA received — ${outreach.business_name_text ?? outreach._id}`,
+    `An NDA has been received from Langcliffe and an acknowledgment draft is awaiting your approval.\n\nBusiness: ${outreach.business_name_text ?? 'Unknown'}\nFrom: ${outreach.langcliffe_contact_text ?? 'Unknown'}`,
+  ).catch(() => {});
 
   // Auto-send user notification email (no admin approval needed — going to user not broker)
   const profileRes  = await getBuyerInfo(userId);
@@ -990,6 +1044,10 @@ export async function generateAndQueueNDAReturn(outreach) {
   const ndaReturnDraft = await generateNDAReturnBody({ outreach, agentName, agentEmail });
   await updateNDAReturnDraft(outreach._id, ndaReturnDraft);
   console.log(`[langcliffe] NDA return draft generated for outreach ${outreach._id}`);
+  notifyAdmins(
+    `[Acquiro] Signed NDA ready to send — ${outreach.business_name_text ?? outreach._id}`,
+    `A user has signed the NDA and the return email is awaiting your approval.\n\nBusiness: ${outreach.business_name_text ?? 'Unknown'}\nTo: ${outreach.langcliffe_contact_text ?? 'Unknown'}`,
+  ).catch(() => {});
 }
 
 /**
