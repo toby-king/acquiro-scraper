@@ -514,7 +514,7 @@ export async function getPendingOutreachQueue() {
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
 
   // Fetch initial drafts (pending), reply drafts (pending_reply), NDA received (nda_received), and signed NDAs (nda_signed)
-  const [pendingRes, replyRes, ndaReceivedRes, ndaSignedRes] = await Promise.all([
+  const [pendingRes, replyRes, ndaReceivedRes, ndaSignedRes, miscRes] = await Promise.all([
     fetch(
       `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(JSON.stringify([{ key: 'status_text', constraint_type: 'equals', value: 'pending' }]))}&sort_field=Created Date&descending=true`,
       { headers: { Authorization: `Bearer ${apiKey}` } },
@@ -531,21 +531,27 @@ export async function getPendingOutreachQueue() {
       `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(JSON.stringify([{ key: 'status_text', constraint_type: 'equals', value: 'nda_signed' }]))}&sort_field=Created Date&descending=true`,
       { headers: { Authorization: `Bearer ${apiKey}` } },
     ),
+    fetch(
+      `${BUBBLE_BASE}/obj/LangcliffeOutreach?constraints=${encodeURIComponent(JSON.stringify([{ key: 'status_text', constraint_type: 'equals', value: 'misc' }]))}&sort_field=Created Date&descending=true`,
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+    ),
   ]);
 
   if (!pendingRes.ok)     throw new Error(`Bubble getPendingOutreachQueue (pending) returned HTTP ${pendingRes.status}`);
   if (!replyRes.ok)       throw new Error(`Bubble getPendingOutreachQueue (pending_reply) returned HTTP ${replyRes.status}`);
   if (!ndaReceivedRes.ok) throw new Error(`Bubble getPendingOutreachQueue (nda_received) returned HTTP ${ndaReceivedRes.status}`);
   if (!ndaSignedRes.ok)   throw new Error(`Bubble getPendingOutreachQueue (nda_signed) returned HTTP ${ndaSignedRes.status}`);
+  if (!miscRes.ok)        throw new Error(`Bubble getPendingOutreachQueue (misc) returned HTTP ${miscRes.status}`);
 
-  const [pendingJson, replyJson, ndaReceivedJson, ndaSignedJson] = await Promise.all([
-    pendingRes.json(), replyRes.json(), ndaReceivedRes.json(), ndaSignedRes.json(),
+  const [pendingJson, replyJson, ndaReceivedJson, ndaSignedJson, miscJson] = await Promise.all([
+    pendingRes.json(), replyRes.json(), ndaReceivedRes.json(), ndaSignedRes.json(), miscRes.json(),
   ]);
   const results = [
     ...(pendingJson.response?.results ?? []),
     ...(replyJson.response?.results ?? []),
     ...(ndaReceivedJson.response?.results ?? []),
     ...(ndaSignedJson.response?.results ?? []),
+    ...(miscJson.response?.results ?? []),
   ];
 
   // Enrich each record with the user's email address for the admin UI
@@ -931,5 +937,27 @@ export async function setUserLangcliffeConnected(userId) {
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`Bubble setUserLangcliffeConnected returned HTTP ${res.status}: ${text}`);
+  }
+}
+
+export async function createMiscInboundRecord(userId, fromEmail, emailBody) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/LangcliffeOutreach`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      user_user:                    userId,
+      status_text:                  'misc',
+      langcliffe_contact_text:      fromEmail,
+      langcliffe_reply_body_text:   emailBody,
+      listing_id_text:              `misc_${Date.now()}`,
+      business_name_text:           `Unknown — ${fromEmail}`,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Bubble createMiscInboundRecord returned HTTP ${res.status}: ${text}`);
   }
 }
