@@ -783,7 +783,7 @@ export async function handleIMReceived({ outreach, inboundMessage, userId }) {
   const profileRes  = await getBuyerInfo(userId);
   const profile     = profileRes?.results?.[0] ?? {};
   const userDetails = await getUserDetails(userId);
-  const userEmail   = userDetails?.email ?? null;
+  const userEmail   = userDetails?.authentication?.email?.email ?? null;
 
   if (userEmail) {
     try {
@@ -851,7 +851,7 @@ export async function handleNDAReceived({ outreach, inboundMessage, pdfBuffer, p
   const profileRes  = await getBuyerInfo(userId);
   const profile     = profileRes?.results?.[0];
   const userDetails = await getUserDetails(userId);
-  const userEmail   = userDetails?.email ?? null;
+  const userEmail   = userDetails?.authentication?.email?.email ?? null;
   const listingRef  = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
 
   if (userEmail) {
