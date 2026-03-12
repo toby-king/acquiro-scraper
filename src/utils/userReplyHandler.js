@@ -12,6 +12,7 @@
  */
 
 import OpenAI from 'openai';
+import { SECTOR_LABELS } from './sectorClassifier.js';
 import {
   getEmailRecordByThreadId,
   saveInboundEmailRecord,
@@ -202,7 +203,9 @@ async function extractCriteriaUpdates(openai, emailText) {
 - turnover_range_text (string) — revenue/turnover range, e.g. "£500k - £2m"
 - initial_budget_text (string) — available budget/deposit, e.g. "£300k"
 - geography_text (string) — preferred location or region, e.g. "South East England"
-- industry_preferences_list_option_sectors (array of strings) — sector preferences, e.g. ["Manufacturing", "Technology", "Retail"]. Only include if the user explicitly mentions sectors or industries. Use title case.
+- industry_preferences_list_option_sectors (array of strings) — sector preferences. Only include if the user explicitly mentions sectors or industries. You MUST pick from this exact list only:
+${SECTOR_LABELS.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}
+  Return the exact label text. Do not invent or paraphrase sector names.
 
 Email:
 ${emailText}
@@ -214,7 +217,16 @@ Return only valid JSON with the fields explicitly updated. If nothing was clearl
   const match = raw.match(/\{[\s\S]*\}/);
   if (!match) return {};
   try {
-    return JSON.parse(match[0]);
+    const parsed = JSON.parse(match[0]);
+    // Guard: ensure any extracted sectors are valid canonical labels
+    if (Array.isArray(parsed.industry_preferences_list_option_sectors)) {
+      parsed.industry_preferences_list_option_sectors =
+        parsed.industry_preferences_list_option_sectors.filter((s) => SECTOR_LABELS.includes(s));
+      if (parsed.industry_preferences_list_option_sectors.length === 0) {
+        delete parsed.industry_preferences_list_option_sectors;
+      }
+    }
+    return parsed;
   } catch {
     return {};
   }
