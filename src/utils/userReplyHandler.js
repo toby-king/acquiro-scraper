@@ -22,6 +22,7 @@ import {
   updateBuyerCriteria,
   getBusinessByName,
   createPursueRequest,
+  getUserPursueRequests,
 } from './bubbleClient.js';
 
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
@@ -134,7 +135,7 @@ function formatFullListing(business) {
 
 // ── Reply generation ───────────────────────────────────────────────────────────
 
-async function generateReply(openai, { intent, emailText, historyText, agentName, personality, style, traits, buyerContext, fullListing, buyerInfo }) {
+async function generateReply(openai, { intent, emailText, historyText, agentName, personality, style, traits, buyerContext, fullListing, buyerInfo, alreadyPursuing }) {
   const personalityLine = personality ? `Your personality: ${personality}.` : '';
   const styleLine       = style       ? `Your style: ${style}.`             : '';
   const traitsLine      = traits      ? `Your traits: ${traits}.`           : '';
@@ -148,7 +149,9 @@ async function generateReply(openai, { intent, emailText, historyText, agentName
       intentInstructions = 'The user is asking about a specific listing. Reference the relevant business from the thread and give helpful detail. If you cannot identify which one they mean, ask them to clarify.';
     }
   } else if (intent === 'pursue') {
-    if (fullListing) {
+    if (fullListing && alreadyPursuing) {
+      intentInstructions = `The user wants to move forward with a specific listing, but you are already chasing this one on their behalf. Here are the full details:\n\n${fullListing}\n\nAcknowledge that you already have this one in hand — let them know you are already in contact with the broker and will update them as soon as you hear back. Be reassuring but brief. Do not say you are reaching out again as if for the first time.`;
+    } else if (fullListing) {
       intentInstructions = `The user wants to move forward with a specific listing. Here are the full details:\n\n${fullListing}\n\nDo two things: (1) Share everything you know about this business — give them a thorough picture using the details above so they feel informed. (2) Let them know you are reaching out to the broker/seller on their behalf and will come back to them as soon as you hear something. Be specific about the business name. Do not give them the listing URL or tell them to contact the broker themselves — keep it on-platform.`;
     } else {
       intentInstructions = 'The user wants to pursue a listing but you could not identify which one. Ask them to clarify which business they mean.';
@@ -199,6 +202,7 @@ async function extractCriteriaUpdates(openai, emailText) {
 - turnover_range_text (string) — revenue/turnover range, e.g. "£500k - £2m"
 - initial_budget_text (string) — available budget/deposit, e.g. "£300k"
 - geography_text (string) — preferred location or region, e.g. "South East England"
+- industry_preferences_list_option_sectors (array of strings) — sector preferences, e.g. ["Manufacturing", "Technology", "Retail"]. Only include if the user explicitly mentions sectors or industries. Use title case.
 
 Email:
 ${emailText}
@@ -270,25 +274,32 @@ export async function handleUserReply({ threadId, fromEmail, emailText, toAgentE
     }
   }
 
-  // 6a. If pursue: create a Pursue_Request record in Bubble
+  // 6a. If pursue: create a Pursue_Request record in Bubble (guard against duplicates)
+  let alreadyPursuing = false;
   if (intent === 'pursue' && business) {
     try {
-      await createPursueRequest({
-        userId,
-        businessId: business._id,
-        businessName: business.business_name_text ?? 'Unknown',
-        listingUrl: business.url_text ?? '',
-      });
-      log(`Created pursue request for user=${userId} business=${business._id}`);
+      const activePursuits = await getUserPursueRequests(userId);
+      alreadyPursuing = activePursuits.some((p) => p.business_custom_business === business._id);
+      if (!alreadyPursuing) {
+        await createPursueRequest({
+          userId,
+          businessId: business._id,
+          businessName: business.business_name_text ?? 'Unknown',
+          listingUrl: business.url_text ?? '',
+        });
+        log(`Created pursue request for user=${userId} business=${business._id}`);
+      } else {
+        log(`Pursue request already exists for user=${userId} business=${business._id} — skipping creation`);
+      }
     } catch (err) {
-      log(`Failed to create pursue request (non-fatal): ${err.message}`);
+      log(`Failed to handle pursue request (non-fatal): ${err.message}`);
     }
   }
 
   // 6b. Generate reply
   const replyBody = await generateReply(openai, {
     intent, emailText, historyText, agentName,
-    personality, style, traits, buyerContext, fullListing, buyerInfo,
+    personality, style, traits, buyerContext, fullListing, buyerInfo, alreadyPursuing,
   });
 
   // 6c. If criteria_update: extract and persist
