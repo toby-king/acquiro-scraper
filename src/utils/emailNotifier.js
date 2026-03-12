@@ -18,6 +18,7 @@ import {
   getAgentForUser,
   getBuyerInfo,
   getEmailThreadForUser,
+  getUserPursueRequests,
   getTodaysMatchesForUser,
   getTopMatchesForUser,
   getBusinessById,
@@ -88,26 +89,51 @@ function formatBusinessForPrompt(business) {
   return lines.filter(Boolean).join('\n');
 }
 
-async function generateEmailBody({ agentName, userName, matches, isNewMatches, personality, style, traits, criteriaText, emailsSent }) {
+function formatPursuitsForPrompt(pursuits) {
+  if (!pursuits.length) return null;
+  return pursuits.map((p) => {
+    const name = p.business_name_text || 'Unknown Business';
+    const notes = p.admin_notes_text?.trim() || null;
+    if (p.status_text === 'pending') {
+      return `- ${name}: interest registered, waiting to hear back from the broker`;
+    }
+    if (p.status_text === 'contacted') {
+      return `- ${name}: broker contacted, awaiting their response`;
+    }
+    if (p.status_text === 'responded') {
+      return `- ${name}: broker has responded${notes ? ` — ${notes}` : ''}`;
+    }
+    return null;
+  }).filter(Boolean).join('\n');
+}
+
+async function generateEmailBody({ agentName, userName, matches, isNewMatches, personality, style, traits, criteriaText, emailsSent, activePursuits }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const matchesText = matches
     .map((m, i) => `${i + 1}. ${m}`)
     .join('\n\n');
 
-  const personalityLine = personality ? `Your personality: ${personality}.` : '';
-  const styleLine       = style       ? `Your style: ${style}.`             : '';
-  const traitsLine      = traits      ? `Your traits: ${traits}.`           : '';
-  const criteriaLine    = criteriaText ? `${userName}'s acquisition criteria: ${criteriaText}` : '';
+  const personalityLine  = personality  ? `Your personality: ${personality}.` : '';
+  const styleLine        = style        ? `Your style: ${style}.`             : '';
+  const traitsLine       = traits       ? `Your traits: ${traits}.`           : '';
+  const criteriaLine     = criteriaText ? `${userName}'s acquisition criteria: ${criteriaText}` : '';
   const relationshipLine = journeyContext(emailsSent).replace(/\$\{['"]?userName['"]?\}/g, userName);
+  const pursuitsText     = formatPursuitsForPrompt(activePursuits);
 
-  const context = isNewMatches
-    ? `You have found ${matches.length} new acquisition opportunit${matches.length === 1 ? 'y' : 'ies'} for ${userName}.`
-    : `Nothing new surfaced today that clears your bar. Be straight with ${userName} about that — don't dress it up. Then surface these deals from their existing pipeline as a reminder, briefly explaining why they're still worth a look:`;
+  const hasMatches = matches.length > 0;
 
-  const matchInstructions = isNewMatches
-    ? `- For each deal, give ${userName} enough detail to form a real opinion: what the business does, where it is, the key financials, and why it fits what they're after. Connect it to their specific criteria.`
-    : `- For each deal, remind ${userName} why it was surfaced in the first place. A fresh angle, a stat they might not have focused on, or simply a "this one still stands out because..." — keep it brief but specific.`;
+  const context = hasMatches
+    ? (isNewMatches
+        ? `You have found ${matches.length} new acquisition opportunit${matches.length === 1 ? 'y' : 'ies'} for ${userName}.`
+        : `Nothing new surfaced today that clears your bar. Be straight with ${userName} about that — don't dress it up. Then surface these deals from their existing pipeline as a reminder, briefly explaining why they're still worth a look:`)
+    : `Nothing new surfaced today on the deal front.`;
+
+  const matchInstructions = hasMatches
+    ? (isNewMatches
+        ? `- For each deal, give ${userName} enough detail to form a real opinion: what the business does, where it is, the key financials, and why it fits what they're after. Connect it to their specific criteria.`
+        : `- For each deal, remind ${userName} why it was surfaced in the first place. A fresh angle, a stat they might not have focused on, or simply a "this one still stands out because..." — keep it brief but specific.`)
+    : '';
 
   const prompt = `You are ${agentName}, an AI M&A advisor. You are writing a personal daily email to ${userName}. You know ${userName} well — their goals, what gets them interested, and exactly what they're looking for.
 
@@ -117,18 +143,26 @@ ${criteriaLine}
 
 Relationship context: ${relationshipLine}
 
+${pursuitsText ? `PURSUE REQUEST UPDATES (deals ${userName} has asked you to chase up):
+${pursuitsText}` : ''}
+
 ${context}
 
-${matchesText}
+${hasMatches ? matchesText : ''}
 
 Instructions:
 - Write exactly as ${agentName} would speak — relaxed, direct, like you're messaging a mate who happens to be looking to buy a business. Not formal. Not corporate.
 - Start with a natural greeting and a short opener (2-3 sentences max). Address ${userName} directly and casually — the greeting should match your personality (e.g. "Morning," / "Hey ${userName}," / just their name). Follow it with something personal: what you've been scanning, what the market looks like, or a quick nod to what ${userName} is after. Do NOT reference the date, and do NOT use "here's today's list" or anything that sounds like a newsletter intro.
+${pursuitsText ? `- After the opener, give a brief natural update on each pursue request — one sentence each. Something like "Still chasing the broker on [name], no word yet" or "I've reached out to [name], waiting to hear back." Casual, not a status report. Then transition naturally into the deals below.` : ''}
+${hasMatches ? `- Before listing the deals, add one short transitional sentence that introduces them naturally — e.g. "In the meantime, a few from your pipeline worth keeping on your radar:" or similar. Make it feel like a natural handoff, not a heading.
+- Each deal must be formatted as a clearly separated block:
+  1. Business name in <strong> tags as a title on its own line
+  2. Key stats (asking price, turnover, net profit, location, sector) as a short <ul> list — one stat per <li>. Omit any stat you don't have data for.
+  3. A 1-2 sentence paragraph below explaining why this deal fits ${userName}'s criteria. Do not run deals together — each one must be its own block.` : ''}
 ${matchInstructions}
-- Use the full data provided for each listing. Weave the numbers into natural sentences — no bullet-point stat dumps.
-- Keep each deal to 2-3 sentences max — punchy, not a paragraph.
+- Use the full data provided for each listing. Put the raw numbers in the stat list, then use the explanatory sentence(s) to connect it to ${userName}'s goals.
 - Do not use phrases like "exciting opportunity", "I'm pleased to share", "I hope this finds you well", "don't miss out", or any marketing language.
-- Do not sign off — added separately.
+- End with a short natural sign-off in character — one sentence that implicitly invites a reply, then your name on a new line. Match your personality. Not "Best regards", not "Kind regards", not "Don't hesitate to reach out". Just something that sounds like a real person wrapping up a message.
 - Return clean HTML (no \`\`\`html wrapper). Use <p>, <ul>, <li>, <strong> tags only.`;
 
   const response = await openai.responses.create({
@@ -137,8 +171,7 @@ ${matchInstructions}
   });
 
   const body = response.output_text ?? response.output?.[0]?.content?.[0]?.text ?? '';
-  const footer = `<p>Reply to this email if you want to discuss any of these, or if your criteria have changed.</p>\n<p>${agentName}</p>`;
-  return `${body}\n${footer}`;
+  return body;
 }
 
 // ── Per-user pipeline ──────────────────────────────────────────────────────────
@@ -152,11 +185,12 @@ export async function sendEmailForUser(userId) {
     return { skipped: true, reason: 'no email' };
   }
 
-  // 2. Agent details + user name + email history (for journey context)
-  const [agent, buyerInfoRes, emailThread] = await Promise.all([
+  // 2. Agent details + user name + email history + active pursue requests
+  const [agent, buyerInfoRes, emailThread, activePursuits] = await Promise.all([
     getAgentForUser(userId),
     getBuyerInfo(userId).catch(() => null),
     getEmailThreadForUser(userId).catch(() => []),
+    getUserPursueRequests(userId).catch(() => []),
   ]);
   const agentName   = agent?.name_text ?? agent?.agent_name_text ?? 'Your Acquiro Advisor';
   const userName    = user?.name_text ?? 'there';
@@ -183,28 +217,28 @@ export async function sendEmailForUser(userId) {
   // 4. Fallback: top non-dismissed matches
   if (!isNewMatches) {
     matchRecords = await getTopMatchesForUser(userId, 3);
-    if (matchRecords.length === 0) {
-      log(`user=${userId} has no matches at all — skipping`);
-      return { skipped: true, reason: 'no matches' };
-    }
   }
 
-  // 5. Fetch business details
-  const businesses = await Promise.all(matchRecords.map((m) => fetchBusinessDetails(m)));
+  // 5. Fetch business details, filtering out any already tracked as pursue requests
+  const pursueBusinessIds = new Set(activePursuits.map((p) => p.business_custom_business).filter(Boolean));
+  const filteredMatchRecords = matchRecords.filter((m) => !pursueBusinessIds.has(m.business_custom_business));
 
-  const formattedMatches = matchRecords
+  const businesses = await Promise.all(filteredMatchRecords.map((m) => fetchBusinessDetails(m)));
+
+  const formattedMatches = filteredMatchRecords
     .map((m, i) => formatBusinessForPrompt(businesses[i]))
     .filter(Boolean);
 
-  if (formattedMatches.length === 0) {
-    log(`user=${userId} — could not format any business details — skipping`);
-    return { skipped: true, reason: 'no business details' };
+  // Skip only if there are no matches AND no active pursue requests to report on
+  if (formattedMatches.length === 0 && activePursuits.length === 0) {
+    log(`user=${userId} has no matches and no active pursuits — skipping`);
+    return { skipped: true, reason: 'no content' };
   }
 
   // 6. Generate email body
   const emailBody = await generateEmailBody({
     agentName, userName, matches: formattedMatches, isNewMatches,
-    personality, style, traits, criteriaText, emailsSent,
+    personality, style, traits, criteriaText, emailsSent, activePursuits,
   });
 
   // 7. Send via SendGrid
