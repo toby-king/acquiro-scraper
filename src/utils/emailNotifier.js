@@ -16,6 +16,8 @@ import {
   getActiveSubscribers,
   getUserDetails,
   getAgentForUser,
+  getBuyerInfo,
+  getEmailThreadForUser,
   getTodaysMatchesForUser,
   getTopMatchesForUser,
   getBusinessById,
@@ -30,6 +32,13 @@ function sanitizeAgentEmail(agentName) {
 
 function log(msg) {
   console.log(`[EmailNotifier] ${msg}`);
+}
+
+function journeyContext(emailsSent) {
+  if (emailsSent === 0) return `This is the first email you are sending ${'{userName}'}. Introduce yourself briefly — one line, nothing cheesy — and set the tone for how you work together.`;
+  if (emailsSent <= 3)  return `You are early in the relationship with ${'{userName}'} — still building rapport. Be warm but not over-familiar yet.`;
+  if (emailsSent <= 10) return `You have been working with ${'{userName}'} for a little while now. You know what they want and they know how you operate.`;
+  return `You and ${'{userName}'} have a well-established working relationship. You know each other well. Keep it tight and comfortable — no need to over-explain anything.`;
 }
 
 // ── Business detail fetcher ────────────────────────────────────────────────────
@@ -49,49 +58,78 @@ async function fetchBusinessDetails(match) {
 
 function formatBusinessForPrompt(business) {
   if (!business) return null;
-  const name   = business.business_name_text ?? business.title_text ?? 'Unknown Business';
-  const price  = business.asking_price_text ?? business.asking_price_number ?? 'POA';
-  const sector = business.sector1_text ?? 'Unknown sector';
-  const loc    = business.location_text ?? 'UK';
-  const desc   = (business.description_text ?? '').slice(0, 300).trim();
+  const name        = business.business_name_text ?? business.title_text ?? 'Unknown Business';
+  const price       = business.asking_price_text ?? (business.asking_price_number ? `£${business.asking_price_number.toLocaleString()}` : null) ?? 'POA';
+  const sector      = business.sector1_text ?? null;
+  const loc         = business.location_text ?? 'UK';
+  const turnover    = business.turnover_text ?? (business.turnover_number ? `£${business.turnover_number.toLocaleString()}` : null);
+  const ebitda      = business.net_profit_text ?? (business.net_profit_number ? `£${business.net_profit_number.toLocaleString()}` : null);
+  const employees   = business.employees_text ?? (business.employees_number != null ? String(business.employees_number) : null);
+  const established = business.established_text ?? null;
+  const tenure      = business.tenure_text ?? null;
+  const desc        = (business.description_text ?? '').slice(0, 500).trim();
+
+  const stats = [
+    sector      ? `Sector: ${sector}`       : null,
+    `Location: ${loc}`,
+    `Asking: ${price}`,
+    turnover    ? `Turnover: ${turnover}`   : null,
+    ebitda      ? `Net profit: ${ebitda}`   : null,
+    employees   ? `Employees: ${employees}` : null,
+    established ? `Est: ${established}`     : null,
+    tenure      ? `Tenure: ${tenure}`       : null,
+  ].filter(Boolean).join(' | ');
 
   const lines = [
-    `• ${name}`,
-    `  Sector: ${sector} | Location: ${loc} | Asking: £${price}`,
-    desc ? `  ${desc}${desc.length === 300 ? '…' : ''}` : null,
+    `Business: ${name}`,
+    stats,
+    desc ? `Description: ${desc}${desc.length === 500 ? '…' : ''}` : null,
   ];
   return lines.filter(Boolean).join('\n');
 }
 
-async function generateEmailBody({ agentName, userName, matches, isNewMatches }) {
+async function generateEmailBody({ agentName, userName, matches, isNewMatches, personality, style, traits, criteriaText, emailsSent }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const matchesText = matches
     .map((m, i) => `${i + 1}. ${m}`)
     .join('\n\n');
 
+  const personalityLine = personality ? `Your personality: ${personality}.` : '';
+  const styleLine       = style       ? `Your style: ${style}.`             : '';
+  const traitsLine      = traits      ? `Your traits: ${traits}.`           : '';
+  const criteriaLine    = criteriaText ? `${userName}'s acquisition criteria: ${criteriaText}` : '';
+  const relationshipLine = journeyContext(emailsSent).replace(/\$\{['"]?userName['"]?\}/g, userName);
+
   const context = isNewMatches
-    ? `You have found ${matches.length} new acquisition opportunit${matches.length === 1 ? 'y' : 'ies'} for the user today.`
-    : `There are no new matches today. Remind the user you are still searching, and surface these top matches from their existing pipeline as a reminder:`;
+    ? `You have found ${matches.length} new acquisition opportunit${matches.length === 1 ? 'y' : 'ies'} for ${userName}.`
+    : `Nothing new surfaced today that clears your bar. Be straight with ${userName} about that — don't dress it up. Then surface these deals from their existing pipeline as a reminder, briefly explaining why they're still worth a look:`;
 
-  const modeInstructions = isNewMatches
-    ? `- For new matches: highlight why each opportunity is interesting.`
-    : `- For reminders: encourage the user to revisit these top opportunities.`;
+  const matchInstructions = isNewMatches
+    ? `- For each deal, give ${userName} enough detail to form a real opinion: what the business does, where it is, the key financials, and why it fits what they're after. Connect it to their specific criteria.`
+    : `- For each deal, remind ${userName} why it was surfaced in the first place. A fresh angle, a stat they might not have focused on, or simply a "this one still stands out because..." — keep it brief but specific.`;
 
-  const prompt = `You are ${agentName}, an AI M&A advisor on the Acquiro platform. Write a short, professional and warm daily email update to the user.
+  const prompt = `You are ${agentName}, an AI M&A advisor. You are writing a personal daily email to ${userName}. You know ${userName} well — their goals, what gets them interested, and exactly what they're looking for.
+
+${[personalityLine, styleLine, traitsLine].filter(Boolean).join(' ')}
+
+${criteriaLine}
+
+Relationship context: ${relationshipLine}
 
 ${context}
 
 ${matchesText}
 
 Instructions:
-- Write in first person as ${agentName}.
-- Keep the tone professional but approachable.
-${modeInstructions}
-- Do not start with a greeting (e.g. "Hello" or "Hi") — the greeting is added separately.
-- End with a brief encouraging note but do not sign off — the sign-off is added separately.
-- Return clean HTML (no \`\`\`html wrapper). Use <p>, <ul>, <li>, <strong> tags only.
-- Do not include subject line, To/From headers, or signatures.`;
+- Write exactly as ${agentName} would speak — relaxed, direct, like you're messaging a mate who happens to be looking to buy a business. Not formal. Not corporate.
+- Start with a natural greeting and a short opener (2-3 sentences max). Address ${userName} directly and casually — the greeting should match your personality (e.g. "Morning," / "Hey ${userName}," / just their name). Follow it with something personal: what you've been scanning, what the market looks like, or a quick nod to what ${userName} is after. Do NOT reference the date, and do NOT use "here's today's list" or anything that sounds like a newsletter intro.
+${matchInstructions}
+- Use the full data provided for each listing. Weave the numbers into natural sentences — no bullet-point stat dumps.
+- Keep each deal to 2-3 sentences max — punchy, not a paragraph.
+- Do not use phrases like "exciting opportunity", "I'm pleased to share", "I hope this finds you well", "don't miss out", or any marketing language.
+- Do not sign off — added separately.
+- Return clean HTML (no \`\`\`html wrapper). Use <p>, <ul>, <li>, <strong> tags only.`;
 
   const response = await openai.responses.create({
     model: 'gpt-4o-mini',
@@ -99,8 +137,8 @@ ${modeInstructions}
   });
 
   const body = response.output_text ?? response.output?.[0]?.content?.[0]?.text ?? '';
-  const footer = `<p>Interested? Just reply to this email.</p>\n<p>If you would like more information on any of these, simply reply and I will send over the full details. You can also reply to update your search criteria at any time and I will adjust your matches accordingly.</p>\n<p>${agentName}</p>`;
-  return `<p>Hi ${userName},</p>\n${body}\n${footer}`;
+  const footer = `<p>Reply to this email if you want to discuss any of these, or if your criteria have changed.</p>\n<p>${agentName}</p>`;
+  return `${body}\n${footer}`;
 }
 
 // ── Per-user pipeline ──────────────────────────────────────────────────────────
@@ -114,18 +152,37 @@ export async function sendEmailForUser(userId) {
     return { skipped: true, reason: 'no email' };
   }
 
-  // 2. Agent name + user name
-  const agent = await getAgentForUser(userId);
-  const agentName = agent?.name_text ?? agent?.agent_name_text ?? 'Your Acquiro Advisor';
-  const userName = user?.name_text ?? 'there';
+  // 2. Agent details + user name + email history (for journey context)
+  const [agent, buyerInfoRes, emailThread] = await Promise.all([
+    getAgentForUser(userId),
+    getBuyerInfo(userId).catch(() => null),
+    getEmailThreadForUser(userId).catch(() => []),
+  ]);
+  const agentName   = agent?.name_text ?? agent?.agent_name_text ?? 'Your Acquiro Advisor';
+  const userName    = user?.name_text ?? 'there';
+  const personality = agent?.personality_options_option_personalityoptions ?? null;
+  const style       = agent?.style_text ?? null;
+  const traits      = agent?.traits_text ?? null;
 
-  // 3. Today's matches
-  let matchRecords = await getTodaysMatchesForUser(userId);
+  // Count only outbound agent digest emails (is_agent = true)
+  const emailsSent = emailThread.filter((e) => e.is_agent).length;
+
+  const buyerProfile = buyerInfoRes?.results?.[0] ?? null;
+  const criteriaText = buyerProfile ? [
+    buyerProfile.ebitda_range_text   ? `EBITDA: ${buyerProfile.ebitda_range_text}`     : null,
+    buyerProfile.turnover_range_text ? `Turnover: ${buyerProfile.turnover_range_text}` : null,
+    buyerProfile.initial_budget_text ? `Budget: ${buyerProfile.initial_budget_text}`   : null,
+    buyerProfile.industry_preferences_list_option_sectors?.length
+      ? `Sectors: ${buyerProfile.industry_preferences_list_option_sectors.join(', ')}` : null,
+  ].filter(Boolean).join('; ') : '';
+
+  // 3. Today's matches (cap at 5)
+  let matchRecords = (await getTodaysMatchesForUser(userId)).slice(0, 5);
   let isNewMatches = matchRecords.length > 0;
 
   // 4. Fallback: top non-dismissed matches
   if (!isNewMatches) {
-    matchRecords = await getTopMatchesForUser(userId, 5);
+    matchRecords = await getTopMatchesForUser(userId, 3);
     if (matchRecords.length === 0) {
       log(`user=${userId} has no matches at all — skipping`);
       return { skipped: true, reason: 'no matches' };
@@ -133,8 +190,7 @@ export async function sendEmailForUser(userId) {
   }
 
   // 5. Fetch business details
-  const businessPromises = matchRecords.map((m) => fetchBusinessDetails(m));
-  const businesses = await Promise.all(businessPromises);
+  const businesses = await Promise.all(matchRecords.map((m) => fetchBusinessDetails(m)));
 
   const formattedMatches = matchRecords
     .map((m, i) => formatBusinessForPrompt(businesses[i]))
@@ -146,7 +202,10 @@ export async function sendEmailForUser(userId) {
   }
 
   // 6. Generate email body
-  const emailBody = await generateEmailBody({ agentName, userName, matches: formattedMatches, isNewMatches });
+  const emailBody = await generateEmailBody({
+    agentName, userName, matches: formattedMatches, isNewMatches,
+    personality, style, traits, criteriaText, emailsSent,
+  });
 
   // 7. Send via SendGrid
   const userHash = parseInt(createHash('sha256').update(userId).digest('hex').slice(0, 8), 16).toString(36);
@@ -157,9 +216,10 @@ export async function sendEmailForUser(userId) {
 
   const sanitizedName = sanitizeAgentEmail(agentName);
   const fromAddress = `${sanitizedName}@acquiro-agent.com`;
+  const matchCount = matchRecords.length;
   const subject = isNewMatches
-    ? `You have new acquisition opportunities | Ref:${threadId}`
-    : `Your acquisition pipeline update | Ref:${threadId}`;
+    ? `${agentName}: ${matchCount} deal${matchCount > 1 ? 's' : ''} worth your attention | Ref:${threadId}`
+    : `${agentName}: your pipeline this week | Ref:${threadId}`;
 
   const sgRes = await fetch('https://api.sendgrid.com/v3/mail/send', {
     method: 'POST',
@@ -181,7 +241,7 @@ export async function sendEmailForUser(userId) {
     throw new Error(`SendGrid returned HTTP ${sgRes.status}: ${errText.substring(0, 200)}`);
   }
 
-  log(`Email sent via SendGrid for user=${userId} from=${fromAddress} (${isNewMatches ? matchRecords.length + ' new matches' : 'top matches reminder'})`);
+  log(`Email sent via SendGrid for user=${userId} from=${fromAddress} (${isNewMatches ? matchRecords.length + ' new matches' : 'top matches reminder'}, email #${emailsSent + 1})`);
 
   // 8. Create Email record in Bubble
   await createEmailRecord({ body: emailBody, threadId, userId });

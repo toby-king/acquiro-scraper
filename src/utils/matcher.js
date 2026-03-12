@@ -173,7 +173,7 @@ export function expandSectorKeywords(sectors) {
 const FINANCIAL_BOOST   = 0.08;
 const FINANCIAL_PENALTY = 0.05;
 const MISSING_PENALTY   = 0.02;
-const LEEWAY            = 0.50;
+const LEEWAY            = 0.20;
 const SECTOR_BOOST      = 0.15;
 
 /**
@@ -332,9 +332,17 @@ export async function generateMatchesForUser(userId) {
   });
   reranked.sort((a, b) => b.adjustedScore - a.adjustedScore);
 
+  // 6a. Hard pre-filter: turnover must exceed EBITDA minimum (profit can't exceed revenue)
+  const financiallyViable = reranked.filter((m) => {
+    if (ebitda.min > 0 && m.metadata?.turnover != null) {
+      return m.metadata.turnover >= ebitda.min;
+    }
+    return true;
+  });
+
   // 7. Apply novelty + exclusion + threshold filters, take top 5
   const exclKeywords = expandSectorKeywords(effectiveExcl);
-  const noveltyFiltered = reranked.filter((m) => !seenIds.includes(m.id));
+  const noveltyFiltered = financiallyViable.filter((m) => !seenIds.includes(m.id));
   const exclFiltered = noveltyFiltered.filter((m) => {
     if (effectiveExcl.length === 0) return true;
     const normalisedSectors = m.metadata?.normalised_sectors ?? [];

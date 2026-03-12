@@ -108,7 +108,7 @@ function formatFullListing(business) {
   return fields.filter(Boolean).join('\n');
 }
 
-async function generateReply(openai, { intent, emailText, threadHistory, agentName, buyerInfo, fullListing }) {
+async function generateReply(openai, { intent, emailText, threadHistory, agentName, personality, style, traits, buyerInfo, fullListing }) {
   const historyText = threadHistory
     .map((m) => `[${m.is_agent ? agentName : 'User'}]: ${m.body}`)
     .join('\n\n');
@@ -117,20 +117,26 @@ async function generateReply(openai, { intent, emailText, threadHistory, agentNa
     ? `Buyer criteria: sector=${buyerInfo.sector_text ?? 'any'}, location=${buyerInfo.location_text ?? 'UK'}, budget=${buyerInfo.budget_text ?? 'flexible'}`
     : '';
 
+  const personalityLine = personality ? `Your personality: ${personality}.` : '';
+  const styleLine       = style       ? `Your style: ${style}.`             : '';
+  const traitsLine      = traits      ? `Your traits: ${traits}.`           : '';
+
   let intentInstructions = '';
   if (intent === 'specific_listing') {
     if (fullListing) {
-      intentInstructions = `The user is asking about a specific listing. Here are the full details for that business:\n\n${fullListing}\n\nUse this information to give a thorough, helpful response. Highlight the most relevant details for an acquirer.`;
+      intentInstructions = `The user is asking about a specific listing. Here are the full details:\n\n${fullListing}\n\nGive a thorough, helpful response — weave the key details into natural sentences rather than listing stats. Highlight what's most relevant to this buyer.`;
     } else {
-      intentInstructions = 'The user is asking about a specific listing. Reference the relevant business from the thread context and provide helpful, detailed information about it. If you cannot identify the specific listing, ask the user to clarify which one they mean.';
+      intentInstructions = 'The user is asking about a specific listing. Reference the relevant business from the thread and give helpful detail. If you cannot identify which one they mean, ask them to clarify.';
     }
   } else if (intent === 'criteria_update') {
-    intentInstructions = 'The user has updated their buying criteria. Acknowledge the changes warmly, confirm what you have noted, and let them know you will adjust their matches accordingly.';
+    intentInstructions = 'The user has updated their buying criteria. Acknowledge what they have told you, confirm you have noted it, and let them know you will adjust their matches accordingly.';
   } else {
-    intentInstructions = 'Respond naturally and helpfully to the user\'s message in context of their M&A acquisition journey.';
+    intentInstructions = "Respond naturally to the user's message in the context of their acquisition journey.";
   }
 
-  const prompt = `You are ${agentName}, an AI M&A advisor on the Acquiro platform helping a user find and acquire a UK business.
+  const prompt = `You are ${agentName}, an AI M&A advisor helping a user find and acquire a UK business. You are replying to their email.
+
+${[personalityLine, styleLine, traitsLine].filter(Boolean).join(' ')}
 
 ${buyerContext}
 
@@ -143,12 +149,12 @@ ${emailText}
 Task: ${intentInstructions}
 
 Instructions:
-- Write in first person as ${agentName}.
-- Keep the tone professional but warm and personable.
-- Be concise — aim for 2-4 short paragraphs.
+- Write exactly as ${agentName} would speak — stay in character throughout. This should feel like a reply from a real person, not a platform.
+- Be conversational and direct. No marketing language, no filler phrases like "Great question!" or "I hope this helps".
+- Be concise — 2-4 short paragraphs.
+- Do not use phrases like "I'm an AI" or reference the platform by name.
 - Return clean HTML using <p>, <ul>, <li>, <strong> tags only.
-- Do not include a greeting or sign-off — those are added separately.
-- Do not include subject line or headers.`;
+- Do not include a greeting or sign-off — those are added separately.`;
 
   const response = await openai.responses.create({
     model: 'gpt-4o-mini',
@@ -213,8 +219,11 @@ export async function handleUserReply({ threadId, fromEmail, emailText, toAgentE
     getBuyerInfo(userId),
   ]);
 
-  const agentName = agent?.name_text ?? agent?.agent_name_text ?? 'Your Acquiro Advisor';
-  const buyerInfo = buyerInfoRes?.results?.[0] ?? null;
+  const agentName   = agent?.name_text ?? agent?.agent_name_text ?? 'Your Acquiro Advisor';
+  const personality = agent?.personality_options_option_personalityoptions ?? null;
+  const style       = agent?.style_text ?? null;
+  const traits      = agent?.traits_text ?? null;
+  const buyerInfo   = buyerInfoRes?.results?.[0] ?? null;
 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -238,7 +247,7 @@ export async function handleUserReply({ threadId, fromEmail, emailText, toAgentE
   }
 
   // 5b. Generate reply
-  const replyBody = await generateReply(openai, { intent, emailText, threadHistory, agentName, buyerInfo, fullListing });
+  const replyBody = await generateReply(openai, { intent, emailText, threadHistory, agentName, personality, style, traits, buyerInfo, fullListing });
 
   // 6. If criteria_update, extract and persist
   if (intent === 'criteria_update') {
