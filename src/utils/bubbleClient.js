@@ -1014,3 +1014,68 @@ export async function getAdminUsers() {
     .map((u) => u?.authentication?.email?.email)
     .filter(Boolean);
 }
+
+export async function createPursueRequest({ userId, businessId, businessName, listingUrl }) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/Pursue_Request`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      user_user: userId,
+      business_custom_business: businessId,
+      business_name_text: businessName,
+      status_text: 'pending',
+      listing_url_text: listingUrl ?? '',
+      notified_status_text: 'pending',
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Bubble createPursueRequest returned HTTP ${res.status}: ${text}`);
+  }
+  const json = await res.json();
+  return json.id; // Bubble returns { id: '...' } on POST
+}
+
+export async function getPursueRequests() {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const url = `${BUBBLE_BASE}/obj/Pursue_Request?sort_field=Created Date&descending=true&limit=100`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getPursueRequests returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response?.results ?? [];
+}
+
+export async function getUserPursueRequests(userId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'user_user', constraint_type: 'equals', value: userId },
+    { key: 'status_text', constraint_type: 'not equal', value: 'closed' },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/Pursue_Request?constraints=${encodeURIComponent(constraints)}&sort_field=Created Date&descending=true&limit=50`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getUserPursueRequests returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response?.results ?? [];
+}
+
+export async function updatePursueRequest(requestId, updates) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/Pursue_Request/${requestId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Bubble updatePursueRequest returned HTTP ${res.status}: ${text}`);
+  }
+}

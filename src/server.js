@@ -33,7 +33,7 @@ import { RightbizScraper } from './scrapers/rightbiz.js';
 import { CoGoGoScraper } from './scrapers/cogogo.js';
 import { DaltonsScraper } from './scrapers/daltons.js';
 import { BusinessesForSaleScraper } from './scrapers/businessesforsale.js';
-import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId, deleteOutreach, getOutreachByContact, getMostRecentSentOutreach, uploadFileToBubble, updateOutreachNDA, createUserNotification, storeSignedNDA, getLangcliffeOutreach, setUserLangcliffeConnected, storeIMDetails, getExistingUserNotification, markNotificationActioned, createMiscInboundRecord } from './utils/bubbleClient.js';
+import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId, deleteOutreach, getOutreachByContact, getMostRecentSentOutreach, uploadFileToBubble, updateOutreachNDA, createUserNotification, storeSignedNDA, getLangcliffeOutreach, setUserLangcliffeConnected, storeIMDetails, getExistingUserNotification, markNotificationActioned, createMiscInboundRecord, getPursueRequests, updatePursueRequest } from './utils/bubbleClient.js';
 import { generateMatchesForUser } from './utils/matcher.js';
 import { processAndIndexListing } from './utils/indexer.js';
 import { parseLangcliffeEmail } from './utils/langcliffeParser.js';
@@ -378,6 +378,64 @@ const server = createServer(async (req, res) => {
       } catch (err) {
         console.error(`[admin] test-email failed: ${err.message}`);
         return send(res, 500, { error: 'Email failed', detail: err.message });
+      }
+    }
+
+    // ── Pursue requests endpoints ────────────────────────────────────────────
+    if (url.startsWith('/admin/pursue-requests')) {
+      // GET /admin/pursue-requests
+      if (method === 'GET' && url === '/admin/pursue-requests') {
+        try {
+          const requests = await getPursueRequests();
+          return send(res, 200, { count: requests.length, requests });
+        } catch (err) {
+          return send(res, 500, { error: 'Failed to fetch pursue requests', detail: err.message });
+        }
+      }
+
+      // POST /admin/pursue-requests/:id/contacted
+      const contactedMatch = url.match(/^\/admin\/pursue-requests\/([^/]+)\/contacted$/);
+      if (method === 'POST' && contactedMatch) {
+        try {
+          await updatePursueRequest(contactedMatch[1], { status_text: 'contacted' });
+          return send(res, 200, { ok: true });
+        } catch (err) {
+          return send(res, 500, { error: 'Update failed', detail: err.message });
+        }
+      }
+
+      // POST /admin/pursue-requests/:id/responded
+      const respondedMatch = url.match(/^\/admin\/pursue-requests\/([^/]+)\/responded$/);
+      if (method === 'POST' && respondedMatch) {
+        try {
+          await updatePursueRequest(respondedMatch[1], { status_text: 'responded' });
+          return send(res, 200, { ok: true });
+        } catch (err) {
+          return send(res, 500, { error: 'Update failed', detail: err.message });
+        }
+      }
+
+      // POST /admin/pursue-requests/:id/closed
+      const closedMatch = url.match(/^\/admin\/pursue-requests\/([^/]+)\/closed$/);
+      if (method === 'POST' && closedMatch) {
+        try {
+          await updatePursueRequest(closedMatch[1], { status_text: 'closed' });
+          return send(res, 200, { ok: true });
+        } catch (err) {
+          return send(res, 500, { error: 'Update failed', detail: err.message });
+        }
+      }
+
+      // PATCH /admin/pursue-requests/:id/notes
+      const notesMatch = url.match(/^\/admin\/pursue-requests\/([^/]+)\/notes$/);
+      if (method === 'PATCH' && notesMatch) {
+        try {
+          const body = await readBody(req);
+          await updatePursueRequest(notesMatch[1], { admin_notes_text: body.notes ?? '' });
+          return send(res, 200, { ok: true });
+        } catch (err) {
+          return send(res, 500, { error: 'Update failed', detail: err.message });
+        }
       }
     }
 
