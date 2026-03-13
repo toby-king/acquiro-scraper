@@ -23,6 +23,9 @@ import {
   getTopMatchesForUser,
   getBusinessById,
   createEmailRecord,
+  getActiveFeatureAnnouncements,
+  getUserFeatureImpressions,
+  incrementFeatureImpression,
 } from './bubbleClient.js';
 
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
@@ -107,7 +110,7 @@ function formatPursuitsForPrompt(pursuits) {
   }).filter(Boolean).join('\n');
 }
 
-async function generateEmailBody({ agentName, userName, matches, isNewMatches, personality, style, traits, criteriaText, emailsSent, activePursuits }) {
+async function generateEmailBody({ agentName, userName, matches, isNewMatches, personality, style, traits, criteriaText, emailsSent, activePursuits, featureAnnouncements }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const matchesText = matches
@@ -120,6 +123,10 @@ async function generateEmailBody({ agentName, userName, matches, isNewMatches, p
   const criteriaLine     = criteriaText ? `${userName}'s acquisition criteria: ${criteriaText}` : '';
   const relationshipLine = journeyContext(emailsSent).replace(/\$\{['"]?userName['"]?\}/g, userName);
   const pursuitsText     = formatPursuitsForPrompt(activePursuits);
+
+  const featureText = featureAnnouncements?.length
+    ? featureAnnouncements.map((a) => `- ${a.headline_text}${a.cta_text ? ` (${a.cta_text})` : ''}`).join('\n')
+    : null;
 
   const hasMatches = matches.length > 0;
 
@@ -146,6 +153,9 @@ Relationship context: ${relationshipLine}
 ${pursuitsText ? `PURSUE REQUEST UPDATES (deals ${userName} has asked you to chase up):
 ${pursuitsText}` : ''}
 
+${featureText ? `NEW FEATURE TO MENTION (weave this naturally into the opener — one sentence, casual, like you're letting them know about something useful. Don't make it a separate section or announcement):
+${featureText}` : ''}
+
 ${context}
 
 ${hasMatches ? matchesText : ''}
@@ -154,6 +164,7 @@ Instructions:
 - Write exactly as ${agentName} would speak — relaxed, direct, like you're messaging a mate who happens to be looking to buy a business. Not formal. Not corporate.
 - Start with a natural greeting and a short opener (2-3 sentences max). Address ${userName} directly and casually — the greeting should match your personality (e.g. "Morning," / "Hey ${userName}," / just their name). Follow it with something personal: what you've been scanning, what the market looks like, or a quick nod to what ${userName} is after. Do NOT reference the date, and do NOT use "here's today's list" or anything that sounds like a newsletter intro.
 ${pursuitsText ? `- After the opener, give a brief natural update on each pursue request — one sentence each. Something like "Still chasing the broker on [name], no word yet" or "I've reached out to [name], waiting to hear back." Casual, not a status report. Then transition naturally into the deals below.` : ''}
+${featureText ? `- Mention the new feature naturally in your opener — one casual sentence. Don't label it as a "new feature" or make it sound like a product announcement.` : ''}
 ${hasMatches ? `- Before listing the deals, add one short transitional sentence that introduces them naturally — e.g. "In the meantime, a few from your pipeline worth keeping on your radar:" or similar. Make it feel like a natural handoff, not a heading.
 - Each deal must be formatted as a clearly separated block:
   1. Business name in <strong> tags as a title on its own line
@@ -192,6 +203,26 @@ export async function sendEmailForUser(userId) {
     getEmailThreadForUser(userId).catch(() => []),
     getUserPursueRequests(userId).catch(() => []),
   ]);
+
+  const [announcements, impressions] = await Promise.all([
+    getActiveFeatureAnnouncements().catch(() => []),
+    getUserFeatureImpressions(userId).catch(() => []),
+  ]);
+
+  const impressionMap = new Map(
+    impressions.map((imp) => [imp.feature_custom_featureannouncement, imp])
+  );
+
+  const qualifyingAnnouncements = announcements.filter((ann) => {
+    // Skip if user has already completed this feature
+    if (ann.completion_field_text && user[ann.completion_field_text]) return false;
+    // Skip if user has already seen it max times
+    const imp = impressionMap.get(ann._id);
+    const seenCount = imp?.impressions_number ?? 0;
+    if (seenCount >= (ann.max_impressions_number ?? 3)) return false;
+    return true;
+  });
+
   const agentName   = agent?.name_text ?? agent?.agent_name_text ?? 'Your Acquiro Advisor';
   const userName    = user?.name_text ?? 'there';
   const personality = agent?.personality_options_option_personalityoptions ?? null;
@@ -239,6 +270,7 @@ export async function sendEmailForUser(userId) {
   const emailBody = await generateEmailBody({
     agentName, userName, matches: formattedMatches, isNewMatches,
     personality, style, traits, criteriaText, emailsSent, activePursuits,
+    featureAnnouncements: qualifyingAnnouncements,
   });
 
   // 7. Send via SendGrid
@@ -276,6 +308,17 @@ export async function sendEmailForUser(userId) {
   }
 
   log(`Email sent via SendGrid for user=${userId} from=${fromAddress} (${isNewMatches ? matchRecords.length + ' new matches' : 'top matches reminder'}, email #${emailsSent + 1})`);
+
+  // Increment feature announcement impressions
+  if (qualifyingAnnouncements.length > 0) {
+    await Promise.all(
+      qualifyingAnnouncements.map((ann) =>
+        incrementFeatureImpression(userId, ann._id).catch((err) =>
+          log(`Failed to increment impression for feature ${ann._id}: ${err.message}`)
+        )
+      )
+    );
+  }
 
   // 8. Create Email record in Bubble
   await createEmailRecord({ body: emailBody, threadId, userId });

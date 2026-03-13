@@ -33,7 +33,7 @@ import { RightbizScraper } from './scrapers/rightbiz.js';
 import { CoGoGoScraper } from './scrapers/cogogo.js';
 import { DaltonsScraper } from './scrapers/daltons.js';
 import { BusinessesForSaleScraper } from './scrapers/businessesforsale.js';
-import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId, deleteOutreach, getOutreachByContact, getMostRecentSentOutreach, uploadFileToBubble, updateOutreachNDA, createUserNotification, storeSignedNDA, getLangcliffeOutreach, setUserLangcliffeConnected, storeIMDetails, getExistingUserNotification, markNotificationActioned, createMiscInboundRecord, getPursueRequests, updatePursueRequest } from './utils/bubbleClient.js';
+import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId, deleteOutreach, getOutreachByContact, getMostRecentSentOutreach, uploadFileToBubble, updateOutreachNDA, createUserNotification, storeSignedNDA, getLangcliffeOutreach, setUserLangcliffeConnected, storeIMDetails, getExistingUserNotification, markNotificationActioned, createMiscInboundRecord, getPursueRequests, updatePursueRequest, getAllFeatureAnnouncements, createFeatureAnnouncement, updateFeatureAnnouncement, getFeatureImpressionStats } from './utils/bubbleClient.js';
 import { generateMatchesForUser } from './utils/matcher.js';
 import { processAndIndexListing } from './utils/indexer.js';
 import { parseLangcliffeEmail } from './utils/langcliffeParser.js';
@@ -631,6 +631,73 @@ const server = createServer(async (req, res) => {
       }
 
       return send(res, 200, { ok: true, message: 'Test pipeline completed — check result for details', result });
+    }
+
+    // ── Feature announcements endpoints ───────────────────────────────────────
+    if (url.startsWith('/admin/feature-announcements')) {
+      // GET /admin/feature-announcements
+      if (method === 'GET' && url === '/admin/feature-announcements') {
+        try {
+          const announcements = await getAllFeatureAnnouncements();
+          return send(res, 200, { count: announcements.length, announcements });
+        } catch (err) {
+          return send(res, 500, { error: 'Failed to fetch feature announcements', detail: err.message });
+        }
+      }
+
+      // POST /admin/feature-announcements
+      if (method === 'POST' && url === '/admin/feature-announcements') {
+        let body;
+        try {
+          body = await readBody(req);
+        } catch {
+          return send(res, 400, { error: 'Request body must be valid JSON' });
+        }
+        if (!body.name_text || !body.headline_text) {
+          return send(res, 400, { error: 'name_text and headline_text are required' });
+        }
+        try {
+          const id = await createFeatureAnnouncement({
+            name_text: body.name_text,
+            headline_text: body.headline_text,
+            cta_text: body.cta_text ?? '',
+            active_boolean: body.active_boolean ?? false,
+            max_impressions_number: body.max_impressions_number ?? 3,
+            completion_field_text: body.completion_field_text ?? '',
+          });
+          return send(res, 201, { ok: true, id });
+        } catch (err) {
+          return send(res, 500, { error: 'Failed to create feature announcement', detail: err.message });
+        }
+      }
+
+      // GET /admin/feature-announcements/:id/stats
+      const statsMatch = url.match(/^\/admin\/feature-announcements\/([^/]+)\/stats$/);
+      if (method === 'GET' && statsMatch) {
+        try {
+          const stats = await getFeatureImpressionStats(statsMatch[1]);
+          return send(res, 200, stats);
+        } catch (err) {
+          return send(res, 500, { error: 'Failed to fetch stats', detail: err.message });
+        }
+      }
+
+      // PATCH /admin/feature-announcements/:id
+      const patchMatch = url.match(/^\/admin\/feature-announcements\/([^/]+)$/);
+      if (method === 'PATCH' && patchMatch) {
+        let body;
+        try {
+          body = await readBody(req);
+        } catch {
+          return send(res, 400, { error: 'Request body must be valid JSON' });
+        }
+        try {
+          await updateFeatureAnnouncement(patchMatch[1], body);
+          return send(res, 200, { ok: true });
+        } catch (err) {
+          return send(res, 500, { error: 'Failed to update feature announcement', detail: err.message });
+        }
+      }
     }
 
     return send(res, 404, { error: 'Unknown admin endpoint' });

@@ -1079,3 +1079,130 @@ export async function updatePursueRequest(requestId, updates) {
     throw new Error(`Bubble updatePursueRequest returned HTTP ${res.status}: ${text}`);
   }
 }
+
+// ── Feature announcements ─────────────────────────────────────────────────────
+
+export async function getActiveFeatureAnnouncements() {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'active_boolean', constraint_type: 'equals', value: true },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/FeatureAnnouncement?constraints=${encodeURIComponent(constraints)}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getActiveFeatureAnnouncements returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response?.results ?? [];
+}
+
+export async function getAllFeatureAnnouncements() {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const url = `${BUBBLE_BASE}/obj/FeatureAnnouncement?sort_field=Created Date&descending=true`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getAllFeatureAnnouncements returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response?.results ?? [];
+}
+
+export async function createFeatureAnnouncement(data) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/FeatureAnnouncement`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Bubble createFeatureAnnouncement returned HTTP ${res.status}: ${text}`);
+  }
+  const json = await res.json();
+  return json.id;
+}
+
+export async function updateFeatureAnnouncement(id, data) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const res = await fetch(`${BUBBLE_BASE}/obj/FeatureAnnouncement/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Bubble updateFeatureAnnouncement returned HTTP ${res.status}: ${text}`);
+  }
+}
+
+export async function getUserFeatureImpressions(userId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'user_user', constraint_type: 'equals', value: userId },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/UserFeatureImpression?constraints=${encodeURIComponent(constraints)}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getUserFeatureImpressions returned HTTP ${res.status}`);
+  const json = await res.json();
+  return json.response?.results ?? [];
+}
+
+export async function incrementFeatureImpression(userId, featureId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  // Check for existing impression record
+  const constraints = JSON.stringify([
+    { key: 'user_user', constraint_type: 'equals', value: userId },
+    { key: 'feature_custom_featureannouncement', constraint_type: 'equals', value: featureId },
+  ]);
+  const searchUrl = `${BUBBLE_BASE}/obj/UserFeatureImpression?constraints=${encodeURIComponent(constraints)}&limit=1`;
+  const searchRes = await fetch(searchUrl, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!searchRes.ok) throw new Error(`Bubble incrementFeatureImpression search returned HTTP ${searchRes.status}`);
+  const searchJson = await searchRes.json();
+  const existing = searchJson.response?.results?.[0];
+
+  if (existing) {
+    // Increment existing
+    const res = await fetch(`${BUBBLE_BASE}/obj/UserFeatureImpression/${existing._id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ impressions_number: (existing.impressions_number ?? 0) + 1 }),
+    });
+    if (!res.ok) throw new Error(`Bubble incrementFeatureImpression PATCH returned HTTP ${res.status}`);
+  } else {
+    // Create new
+    const res = await fetch(`${BUBBLE_BASE}/obj/UserFeatureImpression`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        user_user: userId,
+        feature_custom_featureannouncement: featureId,
+        impressions_number: 1,
+      }),
+    });
+    if (!res.ok) throw new Error(`Bubble incrementFeatureImpression POST returned HTTP ${res.status}`);
+  }
+}
+
+export async function getFeatureImpressionStats(featureId) {
+  const apiKey = process.env.BUBBLE_API_KEY;
+  if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
+
+  const constraints = JSON.stringify([
+    { key: 'feature_custom_featureannouncement', constraint_type: 'equals', value: featureId },
+  ]);
+  const url = `${BUBBLE_BASE}/obj/UserFeatureImpression?constraints=${encodeURIComponent(constraints)}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Bubble getFeatureImpressionStats returned HTTP ${res.status}`);
+  const json = await res.json();
+  const results = json.response?.results ?? [];
+  const totalImpressions = results.reduce((sum, r) => sum + (r.impressions_number ?? 0), 0);
+  return { totalImpressions, uniqueUsers: results.length, impressions: results };
+}
