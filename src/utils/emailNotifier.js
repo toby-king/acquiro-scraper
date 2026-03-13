@@ -252,8 +252,8 @@ export async function sendEmailForUser(userId) {
   const fromAddress = `${sanitizedName}@acquiro-agent.com`;
   const matchCount = matchRecords.length;
   const subject = isNewMatches
-    ? `${agentName}: ${matchCount} deal${matchCount > 1 ? 's' : ''} worth your attention | Ref:${threadId}`
-    : `${agentName}: your pipeline this week | Ref:${threadId}`;
+    ? `${matchCount} new acquisition opportunit${matchCount > 1 ? 'ies' : 'y'} | Ref:${threadId}`
+    : `Your pipeline update | Ref:${threadId}`;
 
   const sgRes = await fetch('https://api.sendgrid.com/v3/mail/send', {
     method: 'POST',
@@ -263,8 +263,8 @@ export async function sendEmailForUser(userId) {
     },
     body: JSON.stringify({
       personalizations: [{ to: [{ email }] }],
-      from: { email: fromAddress, name: agentName },
-      reply_to: { email: fromAddress, name: agentName },
+      from: { email: fromAddress, name: `${agentName} @ Acquiro` },
+      reply_to: { email: fromAddress, name: `${agentName} @ Acquiro` },
       subject,
       content: [{ type: 'text/html', value: emailBody }],
     }),
