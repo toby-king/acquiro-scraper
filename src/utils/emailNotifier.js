@@ -310,6 +310,9 @@ export async function sendEmailForUser(userId) {
       reply_to: { email: fromAddress, name: `${agentName} @ Acquiro` },
       subject,
       content: [{ type: 'text/html', value: emailBody }],
+      headers: {
+        'Message-ID': `<${threadId}@acquiro-agent.com>`,
+      },
     }),
   });
 
