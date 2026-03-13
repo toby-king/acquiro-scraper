@@ -338,7 +338,7 @@ export async function getBusinessByName(name) {
   if (!apiKey) throw new Error('BUBBLE_API_KEY env var is not set');
 
   const constraints = JSON.stringify([
-    { key: 'business_name_text', constraint_type: 'contains', value: name },
+    { key: 'business_name_text', constraint_type: 'text contains', value: name },
     { key: 'archived_boolean', constraint_type: 'equals', value: false },
   ]);
   const url = `${BUBBLE_BASE}/obj/Business?constraints=${encodeURIComponent(constraints)}&limit=1`;
