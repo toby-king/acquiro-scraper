@@ -113,11 +113,15 @@ function formatPursuitsForPrompt(pursuits) {
 // ── Phase 2: Intent classification (expanded to 10 intents) ──────────────────
 
 async function classifyIntent(openai, { emailText, historyText, buyerContext }) {
+  // For very short messages, skip thread history to prevent context bleeding
+  const wordCount = emailText.trim().split(/\s+/).length;
+  const includeHistory = wordCount > 8;
+
   const prompt = `You are classifying a user's email reply to their AI M&A advisor.
-
-Thread history:
+${includeHistory ? `
+Thread history (for context only — classify based on the LATEST reply, not previous messages):
 ${historyText}
-
+` : ''}
 Latest user reply:
 ${emailText}
 
@@ -125,7 +129,7 @@ Buyer profile: ${buyerContext || 'Not available'}
 
 Classify the intent of the latest user reply as exactly one of:
 - specific_listing — the user is asking for more detail or information about a specific business opportunity
-- pursue — the user wants to move forward with a listing, express serious interest, or asks the advisor to contact the broker/seller
+- pursue — the user wants to move forward with a listing, express serious interest, or asks the advisor to contact the broker/seller. Must contain an explicit request to pursue, move forward, or contact the broker — NOT just a brief reply like "yes" or "sounds good"
 - criteria_update — the user is changing their search criteria (budget, sector, location, size, etc.)
 - criteria_query — the user is asking what their current search criteria or preferences are
 - pursue_status — the user is asking about the status of a listing they previously asked to pursue, or asking about their pipeline/progress generally (e.g. "what's happening with...", "any updates on...", "where are we at with...")
@@ -134,9 +138,9 @@ Classify the intent of the latest user reply as exactly one of:
 - advisory — the user is asking for general M&A advice, due diligence guidance, process questions, or negotiation strategy (e.g. "what should I look for?", "what questions should I ask?", "how does due diligence work?")
 - account — the user is asking about their subscription, billing, cancellation, or account settings (e.g. "how do I cancel?", "I want to pause", "change my email")
 - help — the user is asking what the advisor can do, how the platform works, or what services are available (e.g. "what can you do?", "how does this work?", "who are you?")
-- general — a general reply, question, or conversation not fitting any of the above. IMPORTANT: brief acknowledgements like "thanks", "sounds good", "okay", "great", "cheers", "will do", "noted" are ALWAYS general — even if previous messages in the thread discussed a specific intent.
+- general — a general reply, question, or conversation not fitting any of the above. Short acknowledgements like "thanks", "sounds good", "okay", "great", "cheers", "will do", "noted", "yes", "no" are ALWAYS general.
 
-Classify based ONLY on the latest user reply, not on previous messages in the thread. Reply with just the classification word, nothing else.`;
+Reply with just the classification word, nothing else.`;
 
   const response = await openai.responses.create({ model: 'gpt-4o-mini', input: prompt });
   const raw = (response.output_text ?? '').trim().toLowerCase();
