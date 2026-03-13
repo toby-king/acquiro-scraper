@@ -153,9 +153,6 @@ Relationship context: ${relationshipLine}
 ${pursuitsText ? `PURSUE REQUEST UPDATES (deals ${userName} has asked you to chase up):
 ${pursuitsText}` : ''}
 
-${featureText ? `NEW FEATURE TO MENTION (weave this naturally into the opener — one sentence, casual, like you're letting them know about something useful. Don't make it a separate section or announcement):
-${featureText}` : ''}
-
 ${context}
 
 ${hasMatches ? matchesText : ''}
@@ -164,7 +161,8 @@ Instructions:
 - Write exactly as ${agentName} would speak — relaxed, direct, like you're messaging a mate who happens to be looking to buy a business. Not formal. Not corporate.
 - Start with a natural greeting and a short opener (2-3 sentences max). Address ${userName} directly and casually — the greeting should match your personality (e.g. "Morning," / "Hey ${userName}," / just their name). Follow it with something personal: what you've been scanning, what the market looks like, or a quick nod to what ${userName} is after. Do NOT reference the date, and do NOT use "here's today's list" or anything that sounds like a newsletter intro.
 ${pursuitsText ? `- After the opener, give a brief natural update on each pursue request — one sentence each. Something like "Still chasing the broker on [name], no word yet" or "I've reached out to [name], waiting to hear back." Casual, not a status report. Then transition naturally into the deals below.` : ''}
-${featureText ? `- Mention the new feature naturally in your opener — one casual sentence. Don't label it as a "new feature" or make it sound like a product announcement.` : ''}
+${featureText ? `- After the opener and before any pursue updates, add a separate sentence framed as a quick update — e.g. "By the way, I've also just..." or "Quick update —". Keep it to one sentence describing what's new and how to use it. Don't call it a "new feature" or make it sound like a product announcement. Here's what to mention:
+${featureText}` : ''}
 ${hasMatches ? `- Before listing the deals, add one short transitional sentence that introduces them naturally — e.g. "In the meantime, a few from your pipeline worth keeping on your radar:" or similar. Make it feel like a natural handoff, not a heading.
 - Each deal must be formatted as a clearly separated block:
   1. Business name in <strong> tags as a title on its own line
