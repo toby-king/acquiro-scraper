@@ -244,11 +244,19 @@ export async function sendEmailForUser(userId) {
 
   const buyerProfile = buyerInfoRes?.results?.[0] ?? null;
   const criteriaText = buyerProfile ? [
-    buyerProfile.ebitda_range_text   ? `EBITDA: ${buyerProfile.ebitda_range_text}`     : null,
-    buyerProfile.turnover_range_text ? `Turnover: ${buyerProfile.turnover_range_text}` : null,
-    buyerProfile.initial_budget_text ? `Budget: ${buyerProfile.initial_budget_text}`   : null,
+    buyerProfile.ebitda_range_text       ? `EBITDA: ${buyerProfile.ebitda_range_text}`       : null,
+    buyerProfile.turnover_range_text     ? `Turnover: ${buyerProfile.turnover_range_text}`   : null,
+    buyerProfile.initial_budget_text     ? `Budget: ${buyerProfile.initial_budget_text}`     : null,
     buyerProfile.industry_preferences_list_option_sectors?.length
-      ? `Sectors: ${buyerProfile.industry_preferences_list_option_sectors.join(', ')}` : null,
+      ? `Sectors: ${buyerProfile.industry_preferences_list_option_sectors.join(', ')}`       : null,
+    buyerProfile.geography_text          ? `Geography: ${buyerProfile.geography_text}`       : null,
+    buyerProfile.deal_structure_preferences_text ? `Deal structure: ${buyerProfile.deal_structure_preferences_text.trim()}` : null,
+    buyerProfile.funding_source_text     ? `Funding: ${buyerProfile.funding_source_text}`    : null,
+    buyerProfile.involvement_text        ? `Involvement: ${buyerProfile.involvement_text}`   : null,
+    buyerProfile.asset_base_text         ? `Asset base: ${buyerProfile.asset_base_text.trim()}` : null,
+    buyerProfile.buyer_type_text         ? `Buyer type: ${buyerProfile.buyer_type_text}`     : null,
+    buyerProfile.buying_experience_text  ? `Experience: ${buyerProfile.buying_experience_text}` : null,
+    buyerProfile.buying_reason_text      ? `Reason: ${buyerProfile.buying_reason_text}`      : null,
   ].filter(Boolean).join('; ') : '';
 
   // 3. Today's matches (cap at 5)
