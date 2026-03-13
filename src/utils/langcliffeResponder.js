@@ -318,6 +318,20 @@ export async function processLangcliffeListings({ userId, listingsWithBubbleIds,
       turnover:     listing.turnover,
       asking_price: null, // no asking price at teaser stage
     };
+    // Hard financial pre-filter
+    if (ebitda.min > 0 && listing.ebitda != null && listing.ebitda < ebitda.min * 0.25) {
+      console.log(`[langcliffe] Hard filter: EBITDA ${listing.ebitda} < ${ebitda.min * 0.25} (4× below min) — skipping ${listingId}`);
+      continue;
+    }
+    if (ebitda.min > 0 && listing.turnover != null && listing.turnover < ebitda.min) {
+      console.log(`[langcliffe] Hard filter: turnover ${listing.turnover} < EBITDA min ${ebitda.min} — skipping ${listingId}`);
+      continue;
+    }
+    if (turnover.min > 0 && listing.turnover != null && listing.turnover < turnover.min * 0.25) {
+      console.log(`[langcliffe] Hard filter: turnover ${listing.turnover} < ${turnover.min * 0.25} (4× below min) — skipping ${listingId}`);
+      continue;
+    }
+
     const { adjustment: financialAdj } = scoreFinancials(listingMeta, ebitda, turnover, maxPrice);
 
     const adjustedScore = rawScore + (sectorMatch ? SECTOR_BOOST : 0) + financialAdj;

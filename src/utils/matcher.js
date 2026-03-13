@@ -170,11 +170,12 @@ export function expandSectorKeywords(sectors) {
   return [...keywords];
 }
 
-const FINANCIAL_BOOST   = 0.08;
-const FINANCIAL_PENALTY = 0.05;
-const MISSING_PENALTY   = 0.02;
-const LEEWAY            = 0.20;
-const SECTOR_BOOST      = 0.15;
+const FINANCIAL_BOOST        = 0.12;   // reward for in-range (was 0.08)
+const FINANCIAL_PENALTY_BASE = 0.07;   // penalty per doubling outside range
+const FINANCIAL_PENALTY_CAP  = 0.35;   // max penalty per financial field
+const MISSING_PENALTY        = 0.08;   // missing data when buyer has constraint (was 0.02)
+const LEEWAY                 = 0.20;
+const SECTOR_BOOST           = 0.15;
 
 /**
  * Analyse a user's dismissed-with-reason matches to produce per-user scoring adjustments.
@@ -239,8 +240,17 @@ export function scoreFinancials(meta, ebitda, turnover, maxPrice) {
       adjustment += FINANCIAL_BOOST;
       breakdown[label] = `match (+${FINANCIAL_BOOST})`;
     } else {
-      adjustment -= FINANCIAL_PENALTY;
-      breakdown[label] = `outside range (−${FINANCIAL_PENALTY})`;
+      // Proportional penalty — scales with how far outside range
+      let ratio;
+      if (listingVal < leniMin) {
+        ratio = leniMin / listingVal;   // e.g. £960k / £137k = 7.0×
+      } else {
+        ratio = listingVal / leniMax;   // above range
+      }
+      const penalty = Math.min(Math.log2(ratio) * FINANCIAL_PENALTY_BASE, FINANCIAL_PENALTY_CAP);
+      adjustment -= penalty;
+      const dir = listingVal < leniMin ? 'below' : 'above';
+      breakdown[label] = `${dir} range ×${ratio.toFixed(1)} (−${penalty.toFixed(3)})`;
     }
   }
 
@@ -332,10 +342,20 @@ export async function generateMatchesForUser(userId) {
   });
   reranked.sort((a, b) => b.adjustedScore - a.adjustedScore);
 
-  // 6a. Hard pre-filter: turnover must exceed EBITDA minimum (profit can't exceed revenue)
+  // 6a. Hard pre-filters: exclude listings that are wildly out of financial range
   const financiallyViable = reranked.filter((m) => {
-    if (ebitda.min > 0 && m.metadata?.turnover != null) {
-      return m.metadata.turnover >= ebitda.min;
+    const meta = m.metadata ?? {};
+    // Turnover must exceed EBITDA minimum (profit can't exceed revenue)
+    if (ebitda.min > 0 && meta.turnover != null) {
+      if (meta.turnover < ebitda.min) return false;
+    }
+    // Exclude if known EBITDA is more than 4× below buyer's minimum
+    if (ebitda.min > 0 && meta.ebitda != null) {
+      if (meta.ebitda < ebitda.min * 0.25) return false;
+    }
+    // Exclude if known turnover is more than 4× below buyer's minimum
+    if (turnover.min > 0 && meta.turnover != null) {
+      if (meta.turnover < turnover.min * 0.25) return false;
     }
     return true;
   });
