@@ -134,9 +134,9 @@ Classify the intent of the latest user reply as exactly one of:
 - advisory — the user is asking for general M&A advice, due diligence guidance, process questions, or negotiation strategy (e.g. "what should I look for?", "what questions should I ask?", "how does due diligence work?")
 - account — the user is asking about their subscription, billing, cancellation, or account settings (e.g. "how do I cancel?", "I want to pause", "change my email")
 - help — the user is asking what the advisor can do, how the platform works, or what services are available (e.g. "what can you do?", "how does this work?", "who are you?")
-- general — a general reply, question, or conversation not fitting any of the above
+- general — a general reply, question, or conversation not fitting any of the above. IMPORTANT: brief acknowledgements like "thanks", "sounds good", "okay", "great", "cheers", "will do", "noted" are ALWAYS general — even if previous messages in the thread discussed a specific intent.
 
-Reply with just the classification word, nothing else.`;
+Classify based ONLY on the latest user reply, not on previous messages in the thread. Reply with just the classification word, nothing else.`;
 
   const response = await openai.responses.create({ model: 'gpt-4o-mini', input: prompt });
   const raw = (response.output_text ?? '').trim().toLowerCase();
@@ -155,8 +155,34 @@ Reply with just the classification word, nothing else.`;
 
 // ── Business identification ────────────────────────────────────────────────────
 
-async function identifyListingName(openai, { emailText, historyText }) {
-  const prompt = `From this email thread, identify the exact name of the business the user is referring to.
+/** Extract candidate business names from the thread by asking OpenAI to list them all */
+async function extractCandidateNames(openai, historyText) {
+  const prompt = `List every business name mentioned in this email thread. These are UK businesses for sale that were discussed between an M&A advisor and a buyer.
+
+Thread:
+${historyText}
+
+Return a JSON array of exact business name strings as they appear in the thread. E.g. ["Acme Engineering Ltd", "Northern Pubs Group"]. If no businesses are mentioned, return [].`;
+
+  const response = await openai.responses.create({ model: 'gpt-4o-mini', input: prompt });
+  const raw = (response.output_text ?? '').trim();
+  const match = raw.match(/\[[\s\S]*\]/);
+  if (!match) return [];
+  try {
+    const parsed = JSON.parse(match[0]);
+    return Array.isArray(parsed) ? parsed.filter((n) => typeof n === 'string' && n.length > 0) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function identifyListingName(openai, { emailText, historyText, candidateNames }) {
+  const candidateHint = candidateNames?.length
+    ? `\n\nThese businesses have been mentioned in the thread:\n${candidateNames.map((n, i) => `${i + 1}. ${n}`).join('\n')}\n\nPick from this list if possible. Return the name EXACTLY as it appears in the list.`
+    : '';
+
+  const prompt = `From this email thread, identify the exact name of the business the user is referring to in their latest message.
+${candidateHint}
 
 Thread:
 ${historyText}
@@ -170,8 +196,13 @@ Return only the business name as a plain string, nothing else. If you cannot ide
   return (response.output_text ?? '').trim().replace(/^["']|["']$/g, '');
 }
 
-async function identifyMultipleListingNames(openai, { emailText, historyText }) {
-  const prompt = `From this email thread, identify ALL business names the user is referring to or comparing.
+async function identifyMultipleListingNames(openai, { emailText, historyText, candidateNames }) {
+  const candidateHint = candidateNames?.length
+    ? `\n\nThese businesses have been mentioned in the thread:\n${candidateNames.map((n, i) => `${i + 1}. ${n}`).join('\n')}\n\nPick from this list if possible. Return names EXACTLY as they appear in the list.`
+    : '';
+
+  const prompt = `From this email thread, identify ALL business names the user is referring to or comparing in their latest message.
+${candidateHint}
 
 Thread:
 ${historyText}
@@ -191,6 +222,41 @@ Return a JSON array of business name strings, e.g. ["Business A", "Business B"].
   } catch {
     return [];
   }
+}
+
+/** Search for a business by name with fallback — tries full name, then shorter fragments */
+async function findBusinessByName(name) {
+  if (!name) return null;
+
+  // Try 1: full name (existing contains search)
+  let result = await getBusinessByName(name);
+  if (result) return result;
+  log(`getBusinessByName("${name}") returned null — trying fallback`);
+
+  // Try 2: strip common prefixes/suffixes and retry
+  const cleaned = name.replace(/^(the|a)\s+/i, '').replace(/\s+(ltd|limited|plc|llp|inc)\.?$/i, '').trim();
+  if (cleaned !== name && cleaned.length > 3) {
+    result = await getBusinessByName(cleaned);
+    if (result) { log(`Fallback matched on cleaned name: "${cleaned}"`); return result; }
+  }
+
+  // Try 3: use first 3 significant words (skip articles)
+  const words = cleaned.split(/\s+/).filter((w) => w.length > 2);
+  if (words.length > 2) {
+    const shortName = words.slice(0, 3).join(' ');
+    result = await getBusinessByName(shortName);
+    if (result) { log(`Fallback matched on short name: "${shortName}"`); return result; }
+  }
+
+  // Try 4: first 2 words
+  if (words.length > 1) {
+    const twoWords = words.slice(0, 2).join(' ');
+    result = await getBusinessByName(twoWords);
+    if (result) { log(`Fallback matched on two words: "${twoWords}"`); return result; }
+  }
+
+  log(`All fallback searches failed for "${name}"`);
+  return null;
 }
 
 function formatFullListing(business) {
@@ -388,13 +454,28 @@ export async function handleUserReply({ threadId, fromEmail, emailText, toAgentE
   let comparisonListings = null;
 
   const listingIntents = ['specific_listing', 'pursue', 'deal_analysis', 'advisory'];
+  const needsListing = listingIntents.includes(intent) || intent === 'compare_listings';
+
+  // Extract candidate business names from thread once (shared by all listing lookups)
+  let candidateNames = [];
+  if (needsListing) {
+    try {
+      candidateNames = await extractCandidateNames(openai, historyText);
+      log(`Candidate business names from thread: ${JSON.stringify(candidateNames)}`);
+    } catch (err) {
+      log(`Failed to extract candidate names (non-fatal): ${err.message}`);
+    }
+  }
+
   if (listingIntents.includes(intent)) {
     try {
-      const businessName = await identifyListingName(openai, { emailText, historyText });
+      const businessName = await identifyListingName(openai, { emailText, historyText, candidateNames });
+      log(`identifyListingName returned: "${businessName}"`);
       if (businessName) {
-        business = await getBusinessByName(businessName);
+        business = await findBusinessByName(businessName);
         fullListing = formatFullListing(business);
-        log(`Fetched full listing for "${businessName}"`);
+        if (business) log(`Fetched full listing for "${businessName}"`);
+        else log(`No listing found for "${businessName}" after all fallbacks`);
       }
     } catch (err) {
       log(`Failed to fetch full listing (non-fatal): ${err.message}`);
@@ -404,9 +485,10 @@ export async function handleUserReply({ threadId, fromEmail, emailText, toAgentE
   // 5b. For compare_listings: identify and fetch multiple businesses
   if (intent === 'compare_listings') {
     try {
-      const names = await identifyMultipleListingNames(openai, { emailText, historyText });
+      const names = await identifyMultipleListingNames(openai, { emailText, historyText, candidateNames });
+      log(`identifyMultipleListingNames returned: ${JSON.stringify(names)}`);
       if (names.length > 0) {
-        const results = await Promise.all(names.map((n) => getBusinessByName(n).catch(() => null)));
+        const results = await Promise.all(names.map((n) => findBusinessByName(n).catch(() => null)));
         comparisonListings = results.filter(Boolean);
         log(`Fetched ${comparisonListings.length} listings for comparison`);
       }
