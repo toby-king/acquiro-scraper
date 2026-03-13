@@ -33,7 +33,7 @@ import { RightbizScraper } from './scrapers/rightbiz.js';
 import { CoGoGoScraper } from './scrapers/cogogo.js';
 import { DaltonsScraper } from './scrapers/daltons.js';
 import { BusinessesForSaleScraper } from './scrapers/businessesforsale.js';
-import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId, deleteOutreach, getOutreachByContact, getMostRecentSentOutreach, uploadFileToBubble, updateOutreachNDA, createUserNotification, storeSignedNDA, getLangcliffeOutreach, setUserLangcliffeConnected, storeIMDetails, getExistingUserNotification, markNotificationActioned, createMiscInboundRecord, getPursueRequests, updatePursueRequest, getAllFeatureAnnouncements, createFeatureAnnouncement, updateFeatureAnnouncement, getFeatureImpressionStats } from './utils/bubbleClient.js';
+import { getBuyerInfo, getActiveSubscribers, createScrapeLog, getLatestScrapeLog, getAgentByEmail, getPendingOutreachQueue, getBubbleIdByListingId, deleteOutreach, getOutreachByContact, getMostRecentSentOutreach, uploadFileToBubble, updateOutreachNDA, createUserNotification, storeSignedNDA, getLangcliffeOutreach, setUserLangcliffeConnected, storeIMDetails, getExistingUserNotification, markNotificationActioned, createMiscInboundRecord, getPursueRequests, updatePursueRequest, getAllFeatureAnnouncements, createFeatureAnnouncement, updateFeatureAnnouncement, getFeatureImpressionStats, getUserDetails, getBusinessById } from './utils/bubbleClient.js';
 import { generateMatchesForUser } from './utils/matcher.js';
 import { processAndIndexListing } from './utils/indexer.js';
 import { parseLangcliffeEmail } from './utils/langcliffeParser.js';
@@ -387,7 +387,59 @@ const server = createServer(async (req, res) => {
       if (method === 'GET' && url === '/admin/pursue-requests') {
         try {
           const requests = await getPursueRequests();
-          return send(res, 200, { count: requests.length, requests });
+
+          // Enrich with user details and business details in parallel
+          const userCache = {};
+          const businessCache = {};
+          const enriched = await Promise.all(requests.map(async (r) => {
+            // Fetch user details (cached per userId)
+            let userName = null;
+            let userEmail = null;
+            if (r.user_user) {
+              if (!userCache[r.user_user]) {
+                try { userCache[r.user_user] = await getUserDetails(r.user_user); } catch { userCache[r.user_user] = null; }
+              }
+              const user = userCache[r.user_user];
+              userName = user?.name_text ?? null;
+              userEmail = user?.authentication?.email?.email ?? null;
+            }
+
+            // Fetch business details (cached per businessId)
+            let businessDescription = null;
+            let businessSector = null;
+            let businessLocation = null;
+            let businessAskingPrice = null;
+            let businessTurnover = null;
+            let businessNetProfit = null;
+            if (r.business_custom_business) {
+              if (!businessCache[r.business_custom_business]) {
+                try { businessCache[r.business_custom_business] = await getBusinessById(r.business_custom_business); } catch { businessCache[r.business_custom_business] = null; }
+              }
+              const biz = businessCache[r.business_custom_business];
+              if (biz) {
+                businessDescription = biz.description_text ?? null;
+                businessSector = biz.sector1_text ?? null;
+                businessLocation = biz.location_text ?? null;
+                businessAskingPrice = biz.asking_price_number ?? null;
+                businessTurnover = biz.turnover_number ?? null;
+                businessNetProfit = biz.net_profit_number ?? null;
+              }
+            }
+
+            return {
+              ...r,
+              user_name_text: userName,
+              user_email_text: userEmail,
+              business_description_text: businessDescription,
+              business_sector_text: businessSector,
+              business_location_text: businessLocation,
+              business_asking_price_number: businessAskingPrice,
+              business_turnover_number: businessTurnover,
+              business_net_profit_number: businessNetProfit,
+            };
+          }));
+
+          return send(res, 200, { count: enriched.length, requests: enriched });
         } catch (err) {
           return send(res, 500, { error: 'Failed to fetch pursue requests', detail: err.message });
         }
