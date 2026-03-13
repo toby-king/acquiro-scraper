@@ -71,7 +71,7 @@ function formatBusinessForPrompt(business) {
   const employees   = business.employees_text ?? (business.employees_number != null ? String(business.employees_number) : null);
   const established = business.established_text ?? null;
   const tenure      = business.tenure_text ?? null;
-  const desc        = (business.description_text ?? '').slice(0, 500).trim();
+  const desc        = (business.description_text ?? '').slice(0, 800).trim();
 
   const stats = [
     sector      ? `Sector: ${sector}`       : null,
@@ -87,7 +87,7 @@ function formatBusinessForPrompt(business) {
   const lines = [
     `Business: ${name}`,
     stats,
-    desc ? `Description: ${desc}${desc.length === 500 ? '…' : ''}` : null,
+    desc ? `Description: ${desc}${desc.length === 800 ? '…' : ''}` : null,
   ];
   return lines.filter(Boolean).join('\n');
 }
@@ -110,7 +110,7 @@ function formatPursuitsForPrompt(pursuits) {
   }).filter(Boolean).join('\n');
 }
 
-async function generateEmailBody({ agentName, userName, matches, isNewMatches, personality, style, traits, criteriaText, emailsSent, activePursuits, featureAnnouncements }) {
+async function generateEmailBody({ agentName, userName, matches, isNewMatches, personality, style, traits, criteriaText, emailsSent, activePursuits, featureAnnouncements, recentEmailHistory }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const matchesText = matches
@@ -130,11 +130,20 @@ async function generateEmailBody({ agentName, userName, matches, isNewMatches, p
 
   const hasMatches = matches.length > 0;
 
+  // Build recent email history summary for context (last 3 exchanges)
+  const historyText = recentEmailHistory?.length
+    ? recentEmailHistory.slice(-6).map((e) => `${e.is_agent ? agentName : userName}: ${e.body.slice(0, 300).replace(/<[^>]+>/g, '').trim()}`).join('\n')
+    : null;
+
   const context = hasMatches
     ? (isNewMatches
         ? `You have found ${matches.length} new acquisition opportunit${matches.length === 1 ? 'y' : 'ies'} for ${userName}.`
         : `Nothing new surfaced today that clears your bar. Be straight with ${userName} about that — don't dress it up. Then surface these deals from their existing pipeline as a reminder, briefly explaining why they're still worth a look:`)
-    : `Nothing new surfaced today on the deal front.`;
+    : `Nothing new surfaced today on the deal front. Instead of listing deals, pick ONE of the following to write about — choose whichever feels most natural given your recent conversations:
+  (a) Ask how their search is going — are they still focused on the same criteria, or has anything shifted?
+  (b) Share a brief, genuine insight about the current market in their target sector (manufacturing, etc.)
+  (c) Ask a specific question that would help you find better matches — e.g. geography flexibility, deal structure, minimum employee count
+  Keep it short (3-5 sentences total after the greeting). This should feel like a quick check-in, not filler.`;
 
   const matchInstructions = hasMatches
     ? (isNewMatches
@@ -152,6 +161,9 @@ Relationship context: ${relationshipLine}
 
 ${pursuitsText ? `PURSUE REQUEST UPDATES (deals ${userName} has asked you to chase up):
 ${pursuitsText}` : ''}
+
+${historyText ? `RECENT EMAIL HISTORY (for context — do NOT repeat or reference these directly, just use them to inform your tone and what to talk about):
+${historyText}` : ''}
 
 ${context}
 
@@ -171,7 +183,7 @@ ${hasMatches ? `- Before listing the deals, add one short transitional sentence 
 ${matchInstructions}
 - Use the full data provided for each listing. Put the raw numbers in the stat list, then use the explanatory sentence(s) to connect it to ${userName}'s goals.
 - Do not use phrases like "exciting opportunity", "I'm pleased to share", "I hope this finds you well", "don't miss out", or any marketing language.
-- End with a short natural sign-off in character — one sentence that implicitly invites a reply, then your name on a new line. Match your personality. Not "Best regards", not "Kind regards", not "Don't hesitate to reach out". Just something that sounds like a real person wrapping up a message.
+- End with a short natural sign-off in character — one sentence that invites a reply, then your name on a new line. Match your personality. Not "Best regards", not "Kind regards", not "Don't hesitate to reach out". Make it clear they can reply directly to this email to chat — e.g. "Just hit reply if any of these catch your eye" or "Reply and let me know what you think". Keep it natural, not instructional.
 - Return clean HTML (no \`\`\`html wrapper). Use <p>, <ul>, <li>, <strong> tags only.`;
 
   const response = await openai.responses.create({
@@ -258,9 +270,9 @@ export async function sendEmailForUser(userId) {
     .map((m, i) => formatBusinessForPrompt(businesses[i]))
     .filter(Boolean);
 
-  // Skip only if there are no matches AND no active pursue requests to report on
-  if (formattedMatches.length === 0 && activePursuits.length === 0) {
-    log(`user=${userId} has no matches and no active pursuits — skipping`);
+  // Skip only if there's genuinely nothing to say
+  if (formattedMatches.length === 0 && activePursuits.length === 0 && qualifyingAnnouncements.length === 0) {
+    log(`user=${userId} has no matches, no active pursuits, and no feature announcements — skipping`);
     return { skipped: true, reason: 'no content' };
   }
 
@@ -269,6 +281,7 @@ export async function sendEmailForUser(userId) {
     agentName, userName, matches: formattedMatches, isNewMatches,
     personality, style, traits, criteriaText, emailsSent, activePursuits,
     featureAnnouncements: qualifyingAnnouncements,
+    recentEmailHistory: emailThread,
   });
 
   // 7. Send via SendGrid
