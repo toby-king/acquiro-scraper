@@ -78,16 +78,16 @@ export async function runArchiver() {
     log(`${results.length} stale listings to check.`);
 
     for (const record of results) {
-      const id = record.listing_id ?? record._id;
+      const id = record.listing_id ?? record.id;
 
       const { outcome, reason } = await checkUrl(record.url);
 
       if (outcome === 'archive') {
-        await archiveListing(record._id);
+        await archiveListing(record.id);
         log(`Archiving ${id}: ${reason}`);
         totalArchived++;
       } else if (outcome === 'alive') {
-        await touchListing(record._id);
+        await touchListing(record.id);
         log(`Still alive: ${id}`);
         totalTouched++;
       } else {

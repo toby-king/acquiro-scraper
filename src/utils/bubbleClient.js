@@ -1,6 +1,6 @@
 /**
  * Data client — Supabase implementation.
- * Replaces all Bubble.io API calls. Same export signatures.
+ * Returns clean Supabase column names (no Bubble _text/_boolean suffixes).
  */
 
 import { supabase } from './supabaseClient.js';
@@ -9,30 +9,30 @@ import { supabase } from './supabaseClient.js';
 
 export async function insertListing(listing) {
   const row = {
-    listing_id:      listing.listing_id       ?? null,
-    business_name:   listing.business_name     ?? null,
-    description:     listing.description       ?? null,
-    location:        listing.location          ?? null,
-    region:          listing.region            ?? null,
-    sector:          listing.sector            ?? null,
-    url:             listing.url               ?? null,
-    image:           listing.image             ?? null,
-    asking_price:    listing.asking_price      ?? null,
-    turnover:        listing.turnover          ?? null,
-    net_profit:      listing.net_profit        ?? null,
-    rent:            listing.rent              ?? null,
-    leasehold:       listing.leasehold         ?? null,
-    source:          listing.source            ?? null,
-    sub_sector:      listing.sub_sector        ?? null,
-    ebit:            listing.ebit              ?? null,
-    ebitda:          listing.ebitda            ?? null,
-    freehold:        listing.freehold          ?? null,
-    franchise_fee:   listing.franchise_fee     ?? null,
-    investment:      listing.investment        ?? null,
-    more_info:       listing.more_info         ?? null,
-    other_financials: listing.other_financials ?? null,
-    last_seen_at:    new Date().toISOString(),
-    archived:        false,
+    listing_id:       listing.listing_id       ?? null,
+    business_name:    listing.business_name     ?? null,
+    description:      listing.description       ?? null,
+    location:         listing.location          ?? null,
+    region:           listing.region            ?? null,
+    sector:           listing.sector            ?? null,
+    url:              listing.url               ?? null,
+    image:            listing.image             ?? null,
+    asking_price:     listing.asking_price      ?? null,
+    turnover:         listing.turnover          ?? null,
+    net_profit:       listing.net_profit        ?? null,
+    rent:             listing.rent              ?? null,
+    leasehold:        listing.leasehold         ?? null,
+    source:           listing.source            ?? null,
+    sub_sector:       listing.sub_sector        ?? null,
+    ebit:             listing.ebit              ?? null,
+    ebitda:           listing.ebitda            ?? null,
+    freehold:         listing.freehold          ?? null,
+    franchise_fee:    listing.franchise_fee     ?? null,
+    investment:       listing.investment        ?? null,
+    more_info:        listing.more_info         ?? null,
+    other_financials: listing.other_financials  ?? null,
+    last_seen_at:     new Date().toISOString(),
+    archived:         false,
   };
 
   console.log(`[db] insertListing listing_id=${listing.listing_id}`);
@@ -44,9 +44,7 @@ export async function insertListing(listing) {
     .single();
 
   if (error) throw new Error(`insertListing failed: ${error.message}`);
-
-  // Return shape that indexer expects: { response: { _id } }
-  return { response: { _id: data.id } };
+  return { id: data.id };
 }
 
 export async function checkListingExists(listing_id) {
@@ -76,21 +74,7 @@ export async function getStaleListings(cursor = 0) {
   const total = count ?? 0;
   const remaining = Math.max(0, total - cursor - (results?.length ?? 0));
 
-  // Return Bubble-compatible shape: { results, remaining, count }
-  // Map fields to Bubble names since archiver reads _id, url_text, etc.
-  return {
-    results: (results ?? []).map(b => ({
-      _id: b.id,
-      listing_id: b.listing_id,
-      listing_id_text: b.listing_id,
-      url: b.url,
-      url_text: b.url,
-      business_name_text: b.business_name,
-      last_seen_at_date: b.last_seen_at,
-    })),
-    remaining,
-    count: results?.length ?? 0,
-  };
+  return { results: results ?? [], remaining, count: results?.length ?? 0 };
 }
 
 export async function archiveListing(id) {
@@ -133,9 +117,7 @@ export async function getBusinessByName(name) {
     .single();
 
   if (error || !data) return null;
-
-  // Map to Bubble field names for callers
-  return mapBusinessToBubble(data);
+  return data;
 }
 
 export async function getBusinessById(id) {
@@ -146,37 +128,7 @@ export async function getBusinessById(id) {
     .single();
 
   if (error || !data) throw new Error(`getBusinessById failed: ${error?.message ?? 'not found'}`);
-  return mapBusinessToBubble(data);
-}
-
-function mapBusinessToBubble(b) {
-  return {
-    _id: b.id,
-    business_name_text: b.business_name,
-    title_text: b.business_name,
-    description_text: b.description,
-    sector1_text: b.sector,
-    url_text: b.url,
-    location_text: b.location,
-    region_text: b.region,
-    image_image: b.image,
-    asking_price_number: b.asking_price,
-    asking_price_text: b.asking_price != null ? `£${b.asking_price.toLocaleString()}` : null,
-    turnover_number: b.turnover,
-    turnover_text: b.turnover != null ? `£${b.turnover.toLocaleString()}` : null,
-    net_profit_number: b.net_profit,
-    net_profit_text: b.net_profit != null ? `£${b.net_profit.toLocaleString()}` : null,
-    rent_number: b.rent,
-    leasehold_number: b.leasehold,
-    listing_id_text: b.listing_id,
-    archived_boolean: b.archived,
-    last_seen_at_date: b.last_seen_at,
-    source_text: b.source,
-    sub_sector_text: b.sub_sector,
-    ebitda_number: b.ebitda,
-    more_info_text: b.more_info,
-    'Created Date': b.created_at,
-  };
+  return data;
 }
 
 // ── Matches ──────────────────────────────────────────────────────────────────
@@ -237,17 +189,7 @@ export async function getTodaysMatchesForUser(userId) {
     .limit(100);
 
   if (error) throw new Error(`getTodaysMatchesForUser failed: ${error.message}`);
-
-  // Map to Bubble field names for callers
-  return (data ?? []).map(m => ({
-    _id: m.id,
-    user_user: m.user_id,
-    business_custom_business: m.business_id,
-    score_number: m.score,
-    match_reason_text: m.match_reason,
-    dismissed_boolean: m.dismissed,
-    'Created Date': m.created_at,
-  }));
+  return data ?? [];
 }
 
 export async function getTopMatchesForUser(userId, limit = 5) {
@@ -260,16 +202,7 @@ export async function getTopMatchesForUser(userId, limit = 5) {
     .limit(limit);
 
   if (error) throw new Error(`getTopMatchesForUser failed: ${error.message}`);
-
-  return (data ?? []).map(m => ({
-    _id: m.id,
-    user_user: m.user_id,
-    business_custom_business: m.business_id,
-    score_number: m.score,
-    match_reason_text: m.match_reason,
-    dismissed_boolean: m.dismissed,
-    'Created Date': m.created_at,
-  }));
+  return data ?? [];
 }
 
 // ── Users ────────────────────────────────────────────────────────────────────
@@ -302,16 +235,7 @@ export async function getUserDetails(userId) {
     .single();
 
   if (error) throw new Error(`getUserDetails failed: ${error.message}`);
-
-  // Map to Bubble shape (callers read authentication.email.email, name_text, etc.)
-  return {
-    _id: data.id,
-    name_text: data.name,
-    authentication: { email: { email: data.email } },
-    is_subscribed_boolean: data.is_subscribed,
-    is_admin_boolean: data.is_admin,
-    role_text: data.role,
-  };
+  return data;
 }
 
 export async function getAdminUsers() {
@@ -343,20 +267,7 @@ export async function getAgentForUser(userId) {
     .single();
 
   if (error || !data) return null;
-
-  // Map to Bubble field names
-  return {
-    _id: data.id,
-    name_text: data.name,
-    email_text: data.email,
-    style_text: data.challenge_style,
-    profanity_boolean: data.profanity,
-    traits_text: data.traits,
-    type_text: data.type,
-    voice_text: data.voice,
-    personality_options_option_personalityoptions: data.personality,
-    user_user: data.user_id,
-  };
+  return data;
 }
 
 export async function getAgentByEmail(agentEmail) {
@@ -368,19 +279,7 @@ export async function getAgentByEmail(agentEmail) {
     .single();
 
   if (error || !data) return null;
-
-  return {
-    _id: data.id,
-    name_text: data.name,
-    email_text: data.email,
-    style_text: data.challenge_style,
-    profanity_boolean: data.profanity,
-    traits_text: data.traits,
-    type_text: data.type,
-    voice_text: data.voice,
-    personality_options_option_personalityoptions: data.personality,
-    user_user: data.user_id,
-  };
+  return data;
 }
 
 // ── Buyer Info ───────────────────────────────────────────────────────────────
@@ -394,65 +293,13 @@ export async function getBuyerInfo(userId) {
     .limit(1);
 
   if (error) throw new Error(`getBuyerInfo failed: ${error.message}`);
-
-  // Return Bubble-compatible shape: { results, count, remaining }
-  const results = (data ?? []).map(b => ({
-    _id: b.id,
-    user_user: b.user_id,
-    buyer_type_text: b.buyer_type,
-    buying_reason_text: b.buying_reason,
-    buying_experience_text: b.buying_experience,
-    decision_speed_text: b.decision_speed,
-    geography_text: b.geography,
-    turnover_range_text: b.turnover_range,
-    ebitda_range_text: b.ebitda_range,
-    ebitda_margin_min_text: b.ebitda_margin_min,
-    asset_base_text: b.asset_base,
-    valuation_range_text: b.valuation_range,
-    deal_structure_preferences_text: b.deal_structure_preference,
-    funding_source_text: b.funding_source,
-    business_age_text: b.business_age,
-    employee_headcount_text: b.employee_headcount,
-    customer_base_type_text: b.customer_base_type,
-    contractual_recurrence_text: b.contractual_recurrence,
-    ip_technology_text: b.ip_technology,
-    physical_digital_text: b.physical_digital,
-    involvement_text: b.involvement,
-    problems_text: b.problems,
-    industry_preferences_list_option_sectors: b.industry_preferences,
-    excluded_sectors_list_option_sectors: b.excluded_sectors,
-    company_overview_text: b.company_overview,
-    langcliffe_contact_email_text: b.langcliffe_contact_email,
-    initial_budget_text: b.initial_budget,
-  }));
-
-  return { results, count: results.length, remaining: 0 };
+  return { results: data ?? [], count: data?.length ?? 0, remaining: 0 };
 }
 
 export async function updateBuyerCriteria(userId, updates) {
-  // Map Bubble field names → Supabase columns
-  const fieldMap = {
-    geography_text: 'geography',
-    turnover_range_text: 'turnover_range',
-    ebitda_range_text: 'ebitda_range',
-    industry_preferences_list_option_sectors: 'industry_preferences',
-    excluded_sectors_list_option_sectors: 'excluded_sectors',
-    involvement_text: 'involvement',
-    funding_source_text: 'funding_source',
-    buyer_type_text: 'buyer_type',
-    buying_reason_text: 'buying_reason',
-    valuation_range_text: 'valuation_range',
-  };
-
-  const mapped = {};
-  for (const [key, val] of Object.entries(updates)) {
-    const col = fieldMap[key] ?? key;
-    mapped[col] = val;
-  }
-
   const { error } = await supabase
     .from('buyer_info')
-    .update(mapped)
+    .update(updates)
     .eq('user_id', userId);
 
   if (error) throw new Error(`updateBuyerCriteria failed: ${error.message}`);
@@ -481,7 +328,7 @@ export async function getEmailRecordByThreadId(threadId) {
     .single();
 
   if (error || !data) return null;
-  return { userId: data.user_id, _id: data.id };
+  return data;
 }
 
 export async function getEmailThreadForUser(userId) {
@@ -493,7 +340,7 @@ export async function getEmailThreadForUser(userId) {
     .limit(100);
 
   if (error) throw new Error(`getEmailThreadForUser failed: ${error.message}`);
-  return (data ?? []).map(r => ({ body: r.body ?? '', is_agent: r.is_agent ?? false }));
+  return data ?? [];
 }
 
 export async function saveInboundEmailRecord({ body, threadId, userId }) {
@@ -574,33 +421,7 @@ export async function getLangcliffeOutreach(outreachId) {
     .single();
 
   if (error) throw new Error(`getLangcliffeOutreach failed: ${error.message}`);
-  return mapOutreachToBubble(data);
-}
-
-function mapOutreachToBubble(o) {
-  return {
-    _id: o.id,
-    user_user: o.user_id,
-    listing_id_text: o.listing_id,
-    langcliffe_contact_text: o.langcliffe_contact,
-    business_name_text: o.business_name,
-    draft_body_text: o.draft_body,
-    inbound_email_text: o.inbound_email,
-    status_text: o.status,
-    sent_at_date: o.sent_at,
-    langcliffe_reply_body_text: o.langcliffe_reply_body,
-    reply_draft_text: o.reply_draft,
-    conversation_history_text: o.conversation_history,
-    nda_file_text: o.nda_file,
-    signed_nda_file_text: o.signed_nda_file,
-    acknowledgment_draft_text: o.acknowledgment_draft,
-    nda_return_draft_text: o.nda_return_draft,
-    thread_message_id_text: o.thread_message_id,
-    im_url_text: o.im_url,
-    im_password_text: o.im_password,
-    'Created Date': o.created_at,
-    user_email_text: null,
-  };
+  return data;
 }
 
 export async function getPendingOutreachQueue() {
@@ -626,8 +447,8 @@ export async function getPendingOutreachQueue() {
   }
 
   return (data ?? []).map(o => ({
-    ...mapOutreachToBubble(o),
-    user_email_text: userEmails[o.user_id] ?? null,
+    ...o,
+    user_email: userEmails[o.user_id] ?? null,
   }));
 }
 
@@ -663,7 +484,7 @@ export async function getMostRecentSentOutreach(userId) {
     .single();
 
   if (error || !data) return null;
-  return mapOutreachToBubble(data);
+  return data;
 }
 
 export async function getOutreachByContact(userId, langcliffeContactEmail) {
@@ -678,7 +499,7 @@ export async function getOutreachByContact(userId, langcliffeContactEmail) {
     .single();
 
   if (error || !data) return null;
-  return mapOutreachToBubble(data);
+  return data;
 }
 
 export async function updateOutreachReply({ outreachId, langcliffeReplyBody, replyDraft, conversationHistory }) {
@@ -820,15 +641,7 @@ export async function getExistingUserNotification(userId, outreachId) {
     .single();
 
   if (error || !data) return null;
-  return {
-    _id: data.id,
-    user_user: data.user_id,
-    type_text: data.type,
-    title_text: data.title,
-    body_text: data.body,
-    status_text: data.status,
-    langcliffe_outreach_text: data.langcliffe_outreach,
-  };
+  return data;
 }
 
 export async function updateUserNotification(notificationId, { title, body }) {
@@ -848,15 +661,7 @@ export async function getUserNotifications(userId) {
     .order('created_at', { ascending: false });
 
   if (error) throw new Error(`getUserNotifications failed: ${error.message}`);
-  return (data ?? []).map(n => ({
-    _id: n.id,
-    type_text: n.type,
-    title_text: n.title,
-    body_text: n.body,
-    status_text: n.status,
-    langcliffe_outreach_text: n.langcliffe_outreach,
-    'Created Date': n.created_at,
-  }));
+  return data ?? [];
 }
 
 export async function markNotificationActioned(notificationId) {
@@ -895,18 +700,7 @@ export async function getPursueRequests() {
     .limit(100);
 
   if (error) throw new Error(`getPursueRequests failed: ${error.message}`);
-
-  return (data ?? []).map(r => ({
-    _id: r.id,
-    user_user: r.user_id,
-    business_custom_business: r.business_id,
-    business_name_text: r.business_name,
-    status_text: r.status,
-    listing_url_text: r.listing_url,
-    admin_notes_text: r.admin_notes,
-    notified_status_text: r.notified_status,
-    'Created Date': r.created_at,
-  }));
+  return data ?? [];
 }
 
 export async function getUserPursueRequests(userId) {
@@ -919,34 +713,13 @@ export async function getUserPursueRequests(userId) {
     .limit(50);
 
   if (error) throw new Error(`getUserPursueRequests failed: ${error.message}`);
-
-  return (data ?? []).map(r => ({
-    _id: r.id,
-    user_user: r.user_id,
-    business_custom_business: r.business_id,
-    business_name_text: r.business_name,
-    status_text: r.status,
-    listing_url_text: r.listing_url,
-    'Created Date': r.created_at,
-  }));
+  return data ?? [];
 }
 
 export async function updatePursueRequest(requestId, updates) {
-  // Map Bubble field names → Supabase columns
-  const fieldMap = {
-    status_text: 'status',
-    admin_notes_text: 'admin_notes',
-    notified_status_text: 'notified_status',
-  };
-
-  const mapped = {};
-  for (const [key, val] of Object.entries(updates)) {
-    mapped[fieldMap[key] ?? key] = val;
-  }
-
   const { error } = await supabase
     .from('pursue_request')
-    .update(mapped)
+    .update(updates)
     .eq('id', requestId);
   if (error) throw new Error(`updatePursueRequest failed: ${error.message}`);
 }
@@ -960,17 +733,7 @@ export async function getActiveFeatureAnnouncements() {
     .eq('active', true);
 
   if (error) throw new Error(`getActiveFeatureAnnouncements failed: ${error.message}`);
-
-  return (data ?? []).map(f => ({
-    _id: f.id,
-    name_text: f.name,
-    headline_text: f.headline,
-    cta_text: f.cta,
-    active_boolean: f.active,
-    max_impressions_number: f.max_impressions,
-    completion_field_text: f.completion_field,
-    'Created Date': f.created_at,
-  }));
+  return data ?? [];
 }
 
 export async function getAllFeatureAnnouncements() {
@@ -980,33 +743,20 @@ export async function getAllFeatureAnnouncements() {
     .order('created_at', { ascending: false });
 
   if (error) throw new Error(`getAllFeatureAnnouncements failed: ${error.message}`);
-
-  return (data ?? []).map(f => ({
-    _id: f.id,
-    name_text: f.name,
-    headline_text: f.headline,
-    cta_text: f.cta,
-    active_boolean: f.active,
-    max_impressions_number: f.max_impressions,
-    completion_field_text: f.completion_field,
-    'Created Date': f.created_at,
-  }));
+  return data ?? [];
 }
 
 export async function createFeatureAnnouncement(data) {
-  // Map Bubble field names → Supabase columns
-  const row = {
-    name: data.name_text ?? data.name,
-    headline: data.headline_text ?? data.headline,
-    cta: data.cta_text ?? data.cta,
-    active: data.active_boolean ?? data.active ?? true,
-    max_impressions: data.max_impressions_number ?? data.max_impressions,
-    completion_field: data.completion_field_text ?? data.completion_field,
-  };
-
   const { data: result, error } = await supabase
     .from('feature_announcement')
-    .insert(row)
+    .insert({
+      name: data.name,
+      headline: data.headline,
+      cta: data.cta,
+      active: data.active ?? true,
+      max_impressions: data.max_impressions,
+      completion_field: data.completion_field,
+    })
     .select('id')
     .single();
 
@@ -1015,23 +765,9 @@ export async function createFeatureAnnouncement(data) {
 }
 
 export async function updateFeatureAnnouncement(id, data) {
-  const fieldMap = {
-    name_text: 'name',
-    headline_text: 'headline',
-    cta_text: 'cta',
-    active_boolean: 'active',
-    max_impressions_number: 'max_impressions',
-    completion_field_text: 'completion_field',
-  };
-
-  const mapped = {};
-  for (const [key, val] of Object.entries(data)) {
-    mapped[fieldMap[key] ?? key] = val;
-  }
-
   const { error } = await supabase
     .from('feature_announcement')
-    .update(mapped)
+    .update(data)
     .eq('id', id);
   if (error) throw new Error(`updateFeatureAnnouncement failed: ${error.message}`);
 }
@@ -1043,17 +779,10 @@ export async function getUserFeatureImpressions(userId) {
     .eq('user_id', userId);
 
   if (error) throw new Error(`getUserFeatureImpressions failed: ${error.message}`);
-
-  return (data ?? []).map(i => ({
-    _id: i.id,
-    user_user: i.user_id,
-    feature_custom_featureannouncement: i.feature_id,
-    impressions_number: i.impressions,
-  }));
+  return data ?? [];
 }
 
 export async function incrementFeatureImpression(userId, featureId) {
-  // Try upsert: if exists, increment; otherwise create
   const { data: existing } = await supabase
     .from('user_feature_impression')
     .select('id, impressions')
@@ -1092,8 +821,6 @@ export async function getFeatureImpressionStats(featureId) {
 // ── File Upload ──────────────────────────────────────────────────────────────
 
 export async function uploadFileToBubble(buffer, filename, mimeType) {
-  // Upload to Supabase Storage instead of Bubble
-  // Using a 'files' bucket — create it in Supabase dashboard if it doesn't exist
   const path = `nda/${Date.now()}_${filename}`;
 
   const { data, error } = await supabase.storage
@@ -1102,7 +829,6 @@ export async function uploadFileToBubble(buffer, filename, mimeType) {
 
   if (error) throw new Error(`File upload failed: ${error.message}`);
 
-  // Get public URL
   const { data: urlData } = supabase.storage
     .from('files')
     .getPublicUrl(path);

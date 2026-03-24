@@ -83,30 +83,30 @@ function formatThreadHistory(threadHistory, agentName) {
 function formatBuyerContext(buyerInfo) {
   if (!buyerInfo) return '';
   return [
-    buyerInfo.ebitda_range_text      ? `EBITDA target: ${buyerInfo.ebitda_range_text}`     : null,
-    buyerInfo.turnover_range_text    ? `Turnover target: ${buyerInfo.turnover_range_text}` : null,
-    buyerInfo.initial_budget_text    ? `Budget: ${buyerInfo.initial_budget_text}`           : null,
-    buyerInfo.industry_preferences_list_option_sectors?.length
-      ? `Preferred sectors: ${buyerInfo.industry_preferences_list_option_sectors.join(', ')}` : null,
-    buyerInfo.geography_text         ? `Geography: ${buyerInfo.geography_text}`             : null,
+    buyerInfo.ebitda_range            ? `EBITDA target: ${buyerInfo.ebitda_range}`           : null,
+    buyerInfo.turnover_range          ? `Turnover target: ${buyerInfo.turnover_range}`       : null,
+    buyerInfo.initial_budget          ? `Budget: ${buyerInfo.initial_budget}`                 : null,
+    buyerInfo.industry_preferences?.length
+      ? `Preferred sectors: ${buyerInfo.industry_preferences.join(', ')}` : null,
+    buyerInfo.geography               ? `Geography: ${buyerInfo.geography}`                  : null,
   ].filter(Boolean).join(' | ');
 }
 
 function formatPursuitsForPrompt(pursuits) {
   if (!pursuits?.length) return null;
   return pursuits.map((p) => {
-    const name = p.business_name_text || 'Unknown Business';
-    const notes = p.admin_notes_text?.trim() || null;
-    if (p.status_text === 'pending') {
+    const name = p.business_name || 'Unknown Business';
+    const notes = p.admin_notes?.trim() || null;
+    if (p.status === 'pending') {
       return `- ${name}: interest registered, waiting to hear back from the broker`;
     }
-    if (p.status_text === 'contacted') {
+    if (p.status === 'contacted') {
       return `- ${name}: broker contacted, awaiting their response`;
     }
-    if (p.status_text === 'responded') {
+    if (p.status === 'responded') {
       return `- ${name}: broker has responded${notes ? ` — ${notes}` : ''}`;
     }
-    return `- ${name}: status ${p.status_text ?? 'unknown'}`;
+    return `- ${name}: status ${p.status ?? 'unknown'}`;
   }).filter(Boolean).join('\n');
 }
 
@@ -266,17 +266,17 @@ async function findBusinessByName(name) {
 function formatFullListing(business) {
   if (!business) return null;
   return [
-    `Name: ${business.business_name_text ?? 'Unknown'}`,
-    `Sector: ${business.sector1_text ?? 'Unknown'}`,
-    `Location: ${business.location_text ?? 'UK'}`,
-    `Asking price: ${business.asking_price_text ?? (business.asking_price_number ? `£${business.asking_price_number.toLocaleString()}` : 'POA')}`,
-    `Turnover: ${business.turnover_text ?? (business.turnover_number ? `£${business.turnover_number.toLocaleString()}` : 'Not stated')}`,
-    `Net profit: ${business.net_profit_text ?? (business.net_profit_number ? `£${business.net_profit_number.toLocaleString()}` : 'Not stated')}`,
-    `Established: ${business.established_text ?? 'Not stated'}`,
-    `Employees: ${business.employees_text ?? (business.employees_number != null ? String(business.employees_number) : 'Not stated')}`,
-    business.description_text ? `Description: ${business.description_text}` : null,
-    business.more_info_text   ? `Additional info: ${business.more_info_text}` : null,
-    business.url_text         ? `Listing URL: ${business.url_text}` : null,
+    `Name: ${business.business_name ?? 'Unknown'}`,
+    `Sector: ${business.sector ?? 'Unknown'}`,
+    `Location: ${business.location ?? 'UK'}`,
+    `Asking price: ${business.asking_price ? `£${business.asking_price.toLocaleString()}` : 'POA'}`,
+    `Turnover: ${business.turnover ? `£${business.turnover.toLocaleString()}` : 'Not stated'}`,
+    `Net profit: ${business.net_profit ? `£${business.net_profit.toLocaleString()}` : 'Not stated'}`,
+    `Established: ${business.established ?? 'Not stated'}`,
+    `Employees: ${business.employees != null ? String(business.employees) : 'Not stated'}`,
+    business.description ? `Description: ${business.description}` : null,
+    business.more_info   ? `Additional info: ${business.more_info}` : null,
+    business.url         ? `Listing URL: ${business.url}` : null,
   ].filter(Boolean).join('\n');
 }
 
@@ -378,13 +378,13 @@ Instructions:
 // ── Criteria extraction ────────────────────────────────────────────────────────
 
 async function extractCriteriaUpdates(openai, emailText) {
-  const prompt = `Extract updated buyer acquisition criteria from this email. Return a JSON object with only the fields explicitly mentioned or changed. Use these exact Bubble field names:
+  const prompt = `Extract updated buyer acquisition criteria from this email. Return a JSON object with only the fields explicitly mentioned or changed. Use these exact field names:
 
-- ebitda_range_text (string) — EBITDA or profit target range, e.g. "£50k - £200k"
-- turnover_range_text (string) — revenue/turnover range, e.g. "£500k - £2m"
-- initial_budget_text (string) — available budget/deposit, e.g. "£300k"
-- geography_text (string) — preferred location or region, e.g. "South East England"
-- industry_preferences_list_option_sectors (array of strings) — sector preferences. Only include if the user explicitly mentions sectors or industries. You MUST pick from this exact list only:
+- ebitda_range (string) — EBITDA or profit target range, e.g. "£50k - £200k"
+- turnover_range (string) — revenue/turnover range, e.g. "£500k - £2m"
+- initial_budget (string) — available budget/deposit, e.g. "£300k"
+- geography (string) — preferred location or region, e.g. "South East England"
+- industry_preferences (array of strings) — sector preferences. Only include if the user explicitly mentions sectors or industries. You MUST pick from this exact list only:
 ${SECTOR_LABELS.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}
   Return the exact label text. Do not invent or paraphrase sector names.
 
@@ -400,11 +400,11 @@ Return only valid JSON with the fields explicitly updated. If nothing was clearl
   try {
     const parsed = JSON.parse(match[0]);
     // Guard: ensure any extracted sectors are valid canonical labels
-    if (Array.isArray(parsed.industry_preferences_list_option_sectors)) {
-      parsed.industry_preferences_list_option_sectors =
-        parsed.industry_preferences_list_option_sectors.filter((s) => SECTOR_LABELS.includes(s));
-      if (parsed.industry_preferences_list_option_sectors.length === 0) {
-        delete parsed.industry_preferences_list_option_sectors;
+    if (Array.isArray(parsed.industry_preferences)) {
+      parsed.industry_preferences =
+        parsed.industry_preferences.filter((s) => SECTOR_LABELS.includes(s));
+      if (parsed.industry_preferences.length === 0) {
+        delete parsed.industry_preferences;
       }
     }
     return parsed;
@@ -438,10 +438,10 @@ export async function handleUserReply({ threadId, fromEmail, emailText, toAgentE
     getUserPursueRequests(userId).catch(() => []),
   ]);
 
-  const agentName   = agent?.name_text ?? agent?.agent_name_text ?? 'Your Acquiro Advisor';
-  const personality = agent?.personality_options_option_personalityoptions ?? null;
-  const style       = agent?.style_text ?? null;
-  const traits      = agent?.traits_text ?? null;
+  const agentName   = agent?.name ?? 'Your Acquiro Advisor';
+  const personality = agent?.personality ?? null;
+  const style       = agent?.challenge_style ?? null;
+  const traits      = agent?.traits ?? null;
   const buyerInfo   = buyerInfoRes?.results?.[0] ?? null;
   const buyerContext = formatBuyerContext(buyerInfo);
   const historyText  = formatThreadHistory(threadHistory, agentName);
@@ -505,17 +505,17 @@ export async function handleUserReply({ threadId, fromEmail, emailText, toAgentE
   let alreadyPursuing = false;
   if (intent === 'pursue' && business) {
     try {
-      alreadyPursuing = activePursuits.some((p) => p.business_custom_business === business._id);
+      alreadyPursuing = activePursuits.some((p) => p.business_id === business.id);
       if (!alreadyPursuing) {
         await createPursueRequest({
           userId,
-          businessId: business._id,
-          businessName: business.business_name_text ?? 'Unknown',
-          listingUrl: business.url_text ?? '',
+          businessId: business.id,
+          businessName: business.business_name ?? 'Unknown',
+          listingUrl: business.url ?? '',
         });
-        log(`Created pursue request for user=${userId} business=${business._id}`);
+        log(`Created pursue request for user=${userId} business=${business.id}`);
       } else {
-        log(`Pursue request already exists for user=${userId} business=${business._id} — skipping creation`);
+        log(`Pursue request already exists for user=${userId} business=${business.id} — skipping creation`);
       }
     } catch (err) {
       log(`Failed to handle pursue request (non-fatal): ${err.message}`);

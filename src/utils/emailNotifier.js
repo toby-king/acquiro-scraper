@@ -48,7 +48,7 @@ function journeyContext(emailsSent) {
 // ── Business detail fetcher ────────────────────────────────────────────────────
 
 async function fetchBusinessDetails(match) {
-  const bubbleId = match.business_custom_business;
+  const bubbleId = match.business_id;
   if (!bubbleId) return null;
   try {
     return await getBusinessById(bubbleId);
@@ -62,16 +62,16 @@ async function fetchBusinessDetails(match) {
 
 function formatBusinessForPrompt(business) {
   if (!business) return null;
-  const name        = business.business_name_text ?? business.title_text ?? 'Unknown Business';
-  const price       = business.asking_price_text ?? (business.asking_price_number ? `£${business.asking_price_number.toLocaleString()}` : null) ?? 'POA';
-  const sector      = business.sector1_text ?? null;
-  const loc         = business.location_text ?? 'UK';
-  const turnover    = business.turnover_text ?? (business.turnover_number ? `£${business.turnover_number.toLocaleString()}` : null);
-  const ebitda      = business.net_profit_text ?? (business.net_profit_number ? `£${business.net_profit_number.toLocaleString()}` : null);
-  const employees   = business.employees_text ?? (business.employees_number != null ? String(business.employees_number) : null);
-  const established = business.established_text ?? null;
-  const tenure      = business.tenure_text ?? null;
-  const desc        = (business.description_text ?? '').slice(0, 800).trim();
+  const name        = business.business_name ?? 'Unknown Business';
+  const price       = business.asking_price ? `£${business.asking_price.toLocaleString()}` : 'POA';
+  const sector      = business.sector ?? null;
+  const loc         = business.location ?? 'UK';
+  const turnover    = business.turnover ? `£${business.turnover.toLocaleString()}` : null;
+  const ebitda      = business.net_profit ? `£${business.net_profit.toLocaleString()}` : null;
+  const employees   = business.employees != null ? String(business.employees) : null;
+  const established = business.established ?? null;
+  const tenure      = business.tenure ?? null;
+  const desc        = (business.description ?? '').slice(0, 800).trim();
 
   const stats = [
     sector      ? `Sector: ${sector}`       : null,
@@ -95,15 +95,15 @@ function formatBusinessForPrompt(business) {
 function formatPursuitsForPrompt(pursuits) {
   if (!pursuits.length) return null;
   return pursuits.map((p) => {
-    const name = p.business_name_text || 'Unknown Business';
-    const notes = p.admin_notes_text?.trim() || null;
-    if (p.status_text === 'pending') {
+    const name = p.business_name || 'Unknown Business';
+    const notes = p.admin_notes?.trim() || null;
+    if (p.status === 'pending') {
       return `- ${name}: interest registered, waiting to hear back from the broker`;
     }
-    if (p.status_text === 'contacted') {
+    if (p.status === 'contacted') {
       return `- ${name}: broker contacted, awaiting their response`;
     }
-    if (p.status_text === 'responded') {
+    if (p.status === 'responded') {
       return `- ${name}: broker has responded${notes ? ` — ${notes}` : ''}`;
     }
     return null;
@@ -125,7 +125,7 @@ async function generateEmailBody({ agentName, userName, matches, isNewMatches, p
   const pursuitsText     = formatPursuitsForPrompt(activePursuits);
 
   const featureText = featureAnnouncements?.length
-    ? featureAnnouncements.map((a) => `- ${a.headline_text}${a.cta_text ? ` (${a.cta_text})` : ''}`).join('\n')
+    ? featureAnnouncements.map((a) => `- ${a.headline}${a.cta ? ` (${a.cta})` : ''}`).join('\n')
     : null;
 
   const hasMatches = matches.length > 0;
@@ -200,7 +200,7 @@ ${matchInstructions}
 export async function sendEmailForUser(userId) {
   // 1. User details
   const user = await getUserDetails(userId);
-  const email = user?.authentication?.email?.email ?? user?.email_text ?? null;
+  const email = user?.email ?? null;
   if (!email) {
     log(`user=${userId} has no email address — skipping`);
     return { skipped: true, reason: 'no email' };
@@ -220,43 +220,43 @@ export async function sendEmailForUser(userId) {
   ]);
 
   const impressionMap = new Map(
-    impressions.map((imp) => [imp.feature_custom_featureannouncement, imp])
+    impressions.map((imp) => [imp.feature_id, imp])
   );
 
   const qualifyingAnnouncements = announcements.filter((ann) => {
     // Skip if user has already completed this feature
-    if (ann.completion_field_text && user[ann.completion_field_text]) return false;
+    if (ann.completion_field && user[ann.completion_field]) return false;
     // Skip if user has already seen it max times
-    const imp = impressionMap.get(ann._id);
-    const seenCount = imp?.impressions_number ?? 0;
-    if (seenCount >= (ann.max_impressions_number ?? 3)) return false;
+    const imp = impressionMap.get(ann.id);
+    const seenCount = imp?.impressions ?? 0;
+    if (seenCount >= (ann.max_impressions ?? 3)) return false;
     return true;
   });
 
-  const agentName   = agent?.name_text ?? agent?.agent_name_text ?? 'Your Acquiro Advisor';
-  const userName    = user?.name_text ?? 'there';
-  const personality = agent?.personality_options_option_personalityoptions ?? null;
-  const style       = agent?.style_text ?? null;
-  const traits      = agent?.traits_text ?? null;
+  const agentName   = agent?.name ?? 'Your Acquiro Advisor';
+  const userName    = user?.name ?? 'there';
+  const personality = agent?.personality ?? null;
+  const style       = agent?.challenge_style ?? null;
+  const traits      = agent?.traits ?? null;
 
   // Count only outbound agent digest emails (is_agent = true)
   const emailsSent = emailThread.filter((e) => e.is_agent).length;
 
   const buyerProfile = buyerInfoRes?.results?.[0] ?? null;
   const criteriaText = buyerProfile ? [
-    buyerProfile.ebitda_range_text       ? `EBITDA: ${buyerProfile.ebitda_range_text}`       : null,
-    buyerProfile.turnover_range_text     ? `Turnover: ${buyerProfile.turnover_range_text}`   : null,
-    buyerProfile.initial_budget_text     ? `Budget: ${buyerProfile.initial_budget_text}`     : null,
-    buyerProfile.industry_preferences_list_option_sectors?.length
-      ? `Sectors: ${buyerProfile.industry_preferences_list_option_sectors.join(', ')}`       : null,
-    buyerProfile.geography_text          ? `Geography: ${buyerProfile.geography_text}`       : null,
-    buyerProfile.deal_structure_preferences_text ? `Deal structure: ${buyerProfile.deal_structure_preferences_text.trim()}` : null,
-    buyerProfile.funding_source_text     ? `Funding: ${buyerProfile.funding_source_text}`    : null,
-    buyerProfile.involvement_text        ? `Involvement: ${buyerProfile.involvement_text}`   : null,
-    buyerProfile.asset_base_text         ? `Asset base: ${buyerProfile.asset_base_text.trim()}` : null,
-    buyerProfile.buyer_type_text         ? `Buyer type: ${buyerProfile.buyer_type_text}`     : null,
-    buyerProfile.buying_experience_text  ? `Experience: ${buyerProfile.buying_experience_text}` : null,
-    buyerProfile.buying_reason_text      ? `Reason: ${buyerProfile.buying_reason_text}`      : null,
+    buyerProfile.ebitda_range              ? `EBITDA: ${buyerProfile.ebitda_range}`              : null,
+    buyerProfile.turnover_range            ? `Turnover: ${buyerProfile.turnover_range}`          : null,
+    buyerProfile.initial_budget            ? `Budget: ${buyerProfile.initial_budget}`             : null,
+    buyerProfile.industry_preferences?.length
+      ? `Sectors: ${buyerProfile.industry_preferences.join(', ')}`                               : null,
+    buyerProfile.geography                 ? `Geography: ${buyerProfile.geography}`              : null,
+    buyerProfile.deal_structure_preference ? `Deal structure: ${buyerProfile.deal_structure_preference.trim()}` : null,
+    buyerProfile.funding_source            ? `Funding: ${buyerProfile.funding_source}`           : null,
+    buyerProfile.involvement               ? `Involvement: ${buyerProfile.involvement}`          : null,
+    buyerProfile.asset_base                ? `Asset base: ${buyerProfile.asset_base.trim()}`     : null,
+    buyerProfile.buyer_type                ? `Buyer type: ${buyerProfile.buyer_type}`            : null,
+    buyerProfile.buying_experience         ? `Experience: ${buyerProfile.buying_experience}`     : null,
+    buyerProfile.buying_reason             ? `Reason: ${buyerProfile.buying_reason}`             : null,
   ].filter(Boolean).join('; ') : '';
 
   // 3. Today's matches (cap at 5)
@@ -269,8 +269,8 @@ export async function sendEmailForUser(userId) {
   }
 
   // 5. Fetch business details, filtering out any already tracked as pursue requests
-  const pursueBusinessIds = new Set(activePursuits.map((p) => p.business_custom_business).filter(Boolean));
-  const filteredMatchRecords = matchRecords.filter((m) => !pursueBusinessIds.has(m.business_custom_business));
+  const pursueBusinessIds = new Set(activePursuits.map((p) => p.business_id).filter(Boolean));
+  const filteredMatchRecords = matchRecords.filter((m) => !pursueBusinessIds.has(m.business_id));
 
   const businesses = await Promise.all(filteredMatchRecords.map((m) => fetchBusinessDetails(m)));
 
@@ -335,8 +335,8 @@ export async function sendEmailForUser(userId) {
   if (qualifyingAnnouncements.length > 0) {
     await Promise.all(
       qualifyingAnnouncements.map((ann) =>
-        incrementFeatureImpression(userId, ann._id).catch((err) =>
-          log(`Failed to increment impression for feature ${ann._id}: ${err.message}`)
+        incrementFeatureImpression(userId, ann.id).catch((err) =>
+          log(`Failed to increment impression for feature ${ann.id}: ${err.message}`)
         )
       )
     );
