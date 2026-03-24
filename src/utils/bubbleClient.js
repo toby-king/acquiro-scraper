@@ -820,18 +820,29 @@ export async function getFeatureImpressionStats(featureId) {
 
 // ── File Upload ──────────────────────────────────────────────────────────────
 
-export async function uploadFileToBubble(buffer, filename, mimeType) {
+export async function uploadFile(buffer, filename, mimeType) {
   const path = `nda/${Date.now()}_${filename}`;
 
-  const { data, error } = await supabase.storage
+  const { error } = await supabase.storage
     .from('files')
     .upload(path, buffer, { contentType: mimeType });
 
   if (error) throw new Error(`File upload failed: ${error.message}`);
 
-  const { data: urlData } = supabase.storage
-    .from('files')
-    .getPublicUrl(path);
-
-  return urlData.publicUrl;
+  // Return the storage path — callers store this in the DB.
+  // Signed URLs are generated on access via getSignedFileUrl().
+  return path;
 }
+
+/** Generate a short-lived signed URL for a private file. */
+export async function getSignedFileUrl(path, expiresInSeconds = 3600) {
+  if (!path) return null;
+  const { data, error } = await supabase.storage
+    .from('files')
+    .createSignedUrl(path, expiresInSeconds);
+  if (error) return null;
+  return data.signedUrl;
+}
+
+// Keep old name as alias so existing callers don't break
+export const uploadFileToBubble = uploadFile;
