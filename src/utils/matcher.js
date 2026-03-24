@@ -6,8 +6,7 @@
 import OpenAI from 'openai';
 import { Pinecone } from '@pinecone-database/pinecone';
 import { getBuyerInfo, getExistingMatches, getDismissedMatchesWithReasons } from './bubbleClient.js';
-
-const BUBBLE_BASE = 'https://toby-85612.bubbleapps.io/version-test/api/1.1';
+import { supabase } from './supabaseClient.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -383,23 +382,17 @@ export async function generateMatchesForUser(userId) {
   }
 
   await Promise.all(
-    matches.map((match) =>
-      fetch(`${BUBBLE_BASE}/obj/matches`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.BUBBLE_API_KEY}`,
-        },
-        body: JSON.stringify({
-          user_user: userId,
-          business_custom_business: match.id,
-          score_number: match.score,
-        }),
-      }).then((res) => {
-        if (!res.ok) throw new Error(`create_match returned HTTP ${res.status} for ${match.id}`);
-        console.log(`[generate-matches] Created match: business=${match.id} score=${match.score}`);
-      }),
-    ),
+    matches.map(async (match) => {
+      const { error } = await supabase
+        .from('matches')
+        .insert({
+          user_id: userId,
+          business_id: match.id,
+          score: match.score,
+        });
+      if (error) throw new Error(`create_match failed for ${match.id}: ${error.message}`);
+      console.log(`[generate-matches] Created match: business=${match.id} score=${match.score}`);
+    }),
   );
 
   return { matched: matches.length, matches };
