@@ -81,7 +81,9 @@ export async function getStaleListings(cursor = 0) {
   return {
     results: (results ?? []).map(b => ({
       _id: b.id,
+      listing_id: b.listing_id,
       listing_id_text: b.listing_id,
+      url: b.url,
       url_text: b.url,
       business_name_text: b.business_name,
       last_seen_at_date: b.last_seen_at,
@@ -151,6 +153,7 @@ function mapBusinessToBubble(b) {
   return {
     _id: b.id,
     business_name_text: b.business_name,
+    title_text: b.business_name,
     description_text: b.description,
     sector1_text: b.sector,
     url_text: b.url,
@@ -158,14 +161,20 @@ function mapBusinessToBubble(b) {
     region_text: b.region,
     image_image: b.image,
     asking_price_number: b.asking_price,
+    asking_price_text: b.asking_price != null ? `£${b.asking_price.toLocaleString()}` : null,
     turnover_number: b.turnover,
+    turnover_text: b.turnover != null ? `£${b.turnover.toLocaleString()}` : null,
     net_profit_number: b.net_profit,
+    net_profit_text: b.net_profit != null ? `£${b.net_profit.toLocaleString()}` : null,
     rent_number: b.rent,
     leasehold_number: b.leasehold,
     listing_id_text: b.listing_id,
     archived_boolean: b.archived,
     last_seen_at_date: b.last_seen_at,
     source_text: b.source,
+    sub_sector_text: b.sub_sector,
+    ebitda_number: b.ebitda,
+    more_info_text: b.more_info,
     'Created Date': b.created_at,
   };
 }
