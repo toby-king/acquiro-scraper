@@ -1,19 +1,25 @@
 /**
  * One-time migration: Bubble.io → Supabase
  *
- * Reads all records from Bubble, inserts into Supabase with new UUIDs,
- * then re-indexes all non-archived businesses into Pinecone.
+ * Users:          fetched from Bubble API (no CSV export available)
+ * Everything else: read from CSV exports in CSV_DIR
  *
  * Run: node --env-file=.env src/scripts/migrateBubbleToSupabase.js
  *
  * Required env vars:
- *   BUBBLE_API_KEY, SUPABASE_URL, SUPABASE_SECRET_KEY,
+ *   BUBBLE_API_KEY            — for user migration only
+ *   SUPABASE_URL, SUPABASE_SECRET_KEY
  *   OPENAI_API_KEY, PINECONE_API_KEY, PINECONE_INDEX_NAME
+ *   CSV_DIR                   — path to Bubble CSV export folder
+ *                               e.g. C:\Users\toby\Documents\acquiro_data
  */
 
 import { createClient } from '@supabase/supabase-js';
 import OpenAI from 'openai';
 import { Pinecone } from '@pinecone-database/pinecone';
+import { readFileSync, readdirSync } from 'fs';
+import { join } from 'path';
+import { parse } from 'csv-parse/sync';
 
 // ── Clients ──────────────────────────────────────────────────────────────────
 
@@ -21,12 +27,15 @@ const BUBBLE_BASE = 'https://toby-85612.bubbleapps.io/version-test/api/1.1';
 const BUBBLE_KEY = process.env.BUBBLE_API_KEY;
 if (!BUBBLE_KEY) throw new Error('BUBBLE_API_KEY required');
 
+const CSV_DIR = process.env.CSV_DIR;
+if (!CSV_DIR) throw new Error('CSV_DIR required — set to path of Bubble CSV export folder');
+
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SECRET_KEY);
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
 const pineconeIndex = pinecone.index(process.env.PINECONE_INDEX_NAME);
 
-// Bubble _id → Supabase UUID lookup
+// Bubble _id → Supabase UUID lookup (built up as each table migrates)
 const idMap = {
   users: {},
   leads: {},
@@ -37,57 +46,88 @@ const idMap = {
   feature_announcement: {},
 };
 
-// ── Bubble helpers ───────────────────────────────────────────────────────────
+// ── CSV helpers ───────────────────────────────────────────────────────────────
+
+function readCsv(keyword) {
+  const files = readdirSync(CSV_DIR);
+  const match = files.find(f => f.toLowerCase().includes(keyword.toLowerCase()));
+  if (!match) throw new Error(`No CSV found in ${CSV_DIR} containing "${keyword}"`);
+  console.log(`  [csv] Reading ${match}`);
+  const content = readFileSync(join(CSV_DIR, match), 'utf8');
+  return parse(content, { columns: true, skip_empty_lines: true, bom: true });
+}
+
+// Bubble CSVs export booleans as "yes"/"no"
+const parseBool = v => v === 'yes' || v === 'true';
+
+// Numeric fields come through as strings; empty string → null
+const parseNum = v => (v === '' || v == null) ? null : Number(v);
+
+// Bubble date format: "Feb 22, 2026 5:20 pm"
+function parseDate(v) {
+  if (!v || !v.trim()) return null;
+  const normalized = v.trim().replace(/\b(am|pm)\b/gi, m => m.toUpperCase());
+  const d = new Date(normalized);
+  return isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+function mapId(table, bubbleId) {
+  if (!bubbleId || !bubbleId.trim()) return null;
+  return idMap[table]?.[bubbleId.trim()] ?? null;
+}
+
+// ── Bubble API helpers (users only) ──────────────────────────────────────────
 
 async function bubbleFetchAll(type) {
   const headers = { Authorization: `Bearer ${BUBBLE_KEY}` };
   const all = [];
   let cursor = 0;
-
   while (true) {
     const res = await fetch(`${BUBBLE_BASE}/obj/${type}?limit=100&cursor=${cursor}`, { headers });
     if (!res.ok) throw new Error(`Bubble GET /obj/${type} failed: ${res.status}`);
     const json = await res.json();
     const { results = [], remaining = 0 } = json.response ?? {};
     all.push(...results);
-    console.log(`  [bubble] ${type}: fetched ${all.length} records (${remaining} remaining)`);
+    console.log(`  [bubble] ${type}: fetched ${all.length} (${remaining} remaining)`);
     if (remaining <= 0) break;
     cursor += results.length;
   }
-
   return all;
 }
 
-// ── Migration helpers ────────────────────────────────────────────────────────
-
-function mapId(table, bubbleId) {
-  if (!bubbleId) return null;
-  return idMap[table]?.[bubbleId] ?? null;
-}
-
-async function insertBatch(table, rows) {
-  if (rows.length === 0) return;
-  // Insert in chunks of 500 to avoid payload limits
-  for (let i = 0; i < rows.length; i += 500) {
-    const chunk = rows.slice(i, i + 500);
-    const { error } = await supabase.from(table).insert(chunk);
-    if (error) throw new Error(`Insert into ${table} failed at chunk ${i}: ${error.message}`);
-  }
-}
-
-// ── Table migrations ─────────────────────────────────────────────────────────
+// ── Table migrations ──────────────────────────────────────────────────────────
 
 async function migrateUsers() {
-  console.log('\n── Migrating users ──');
+  console.log('\n── Migrating users (Bubble API) ──');
   const records = await bubbleFetchAll('user');
 
-  const rows = records.map(u => {
+  for (const u of records) {
     const email = u.authentication?.email?.email ?? null;
-    if (!email) return null; // skip users without email
+    if (!email) continue;
 
-    const row = {
+    // Must create via auth.admin so auth.users and public.users stay in sync
+    const { data: authData, error: authErr } = await supabase.auth.admin.createUser({
       email,
-      name: u.name_text ?? u.name ?? null,
+      email_confirm: true,
+    });
+
+    if (authErr) {
+      if (authErr.message?.includes('already')) {
+        const { data: existing } = await supabase.from('users').select('id').eq('email', email).single();
+        if (existing) {
+          idMap.users[u._id] = existing.id;
+          console.warn(`  User ${email} already exists — reusing ${existing.id}`);
+          continue;
+        }
+      }
+      console.warn(`  Skipping user ${email}: ${authErr.message}`);
+      continue;
+    }
+
+    const userId = authData.user.id;
+
+    await supabase.from('users').update({
+      name: u.name_text ?? null,
       role: u.role_text ?? 'buyer',
       is_subscribed: u.is_subscribed_boolean ?? false,
       is_admin: u.is_admin_boolean ?? false,
@@ -95,20 +135,9 @@ async function migrateUsers() {
       cancel_at: u.cancel_at_text ?? null,
       dealsuite_connected: u.dealsuite_connected_boolean ?? false,
       langcliffe_connected: u.langcliffe_connected_boolean ?? false,
-      created_at: u['Created Date'] ?? new Date().toISOString(),
-    };
+    }).eq('id', userId);
 
-    return { bubbleId: u._id, row };
-  }).filter(Boolean);
-
-  // Insert one at a time because we need the generated UUIDs back
-  for (const { bubbleId, row } of rows) {
-    const { data, error } = await supabase.from('users').insert(row).select('id').single();
-    if (error) {
-      console.warn(`  Skipping user ${row.email}: ${error.message}`);
-      continue;
-    }
-    idMap.users[bubbleId] = data.id;
+    idMap.users[u._id] = userId;
   }
 
   console.log(`  ✓ ${Object.keys(idMap.users).length} users migrated`);
@@ -116,25 +145,21 @@ async function migrateUsers() {
 
 async function migrateLeads() {
   console.log('\n── Migrating leads ──');
-  const records = await bubbleFetchAll('Leads');
+  const records = readCsv('leads');
 
-  const rows = [];
-  for (const l of records) {
+  for (const r of records) {
     const { data, error } = await supabase.from('leads').insert({
-      name: l.name_text ?? null,
-      email: l.email_text ?? null,
-      converted: l.converted_boolean ?? false,
-      completed_form: l.completed_form_boolean ?? false,
-      nudged: l.nudged_boolean ?? false,
-      stage: l.stage_number ?? null,
-      created_at: l['Created Date'] ?? new Date().toISOString(),
+      name:           r.name           || null,
+      email:          r.email          || null,
+      converted:      parseBool(r.converted),
+      completed_form: parseBool(r.completed_form),
+      nudged:         parseBool(r.nudged),
+      stage:          parseNum(r.stage),
+      created_at:     parseDate(r['Creation Date']),
     }).select('id').single();
 
-    if (error) {
-      console.warn(`  Skipping lead ${l._id}: ${error.message}`);
-      continue;
-    }
-    idMap.leads[l._id] = data.id;
+    if (error) { console.warn(`  Skipping lead ${r['unique id']}: ${error.message}`); continue; }
+    idMap.leads[r['unique id']] = data.id;
   }
 
   console.log(`  ✓ ${Object.keys(idMap.leads).length} leads migrated`);
@@ -142,72 +167,69 @@ async function migrateLeads() {
 
 async function migrateBusinesses() {
   console.log('\n── Migrating businesses ──');
-  const records = await bubbleFetchAll('Business');
+  const records = readCsv('businesses');
 
-  for (const b of records) {
+  let inserted = 0;
+  for (const r of records) {
     const { data, error } = await supabase.from('business').insert({
-      business_name: b.business_name_text ?? null,
-      description: b.description_text ?? null,
-      sector: b.sector1_text ?? null,
-      sub_sector: b.sub_sector_text ?? null,
-      url: b.url_text ?? null,
-      location: b.location_text ?? null,
-      region: b.region_text ?? null,
-      image: b.image_image ?? null,
-      asking_price: b.asking_price_number ?? null,
-      turnover: b.turnover_number ?? null,
-      net_profit: b.net_profit_number ?? null,
-      rent: b.rent_number ?? null,
-      leasehold: b.leasehold_number ?? null,
-      ebit: b.ebit_number ?? null,
-      ebitda: b.ebitda_number ?? null,
-      freehold: b.freehold_number ?? null,
-      franchise_fee: b.franchise_fee_number ?? null,
-      investment: b.investment_number ?? null,
-      more_info: b.more_info_text ?? null,
-      other_financials: b.other_financials_text ?? null,
-      source: b.source_text ?? null,
-      listing_id: b.listing_id_text ?? null,
-      archived: b.archived_boolean ?? false,
-      last_seen_at: b.last_seen_at_date ?? null,
-      last_verified_at: b.last_verified_at_date ?? null,
-      created_at: b['Created Date'] ?? new Date().toISOString(),
+      business_name:    r.business_name    || null,
+      description:      r.description      || null,
+      sector:           r.sector           || null,
+      sub_sector:       r.sub_sector       || null,
+      url:              r.url              || null,
+      location:         r.location         || null,
+      region:           r.region           || null,
+      image:            r.image            || null,
+      asking_price:     parseNum(r.asking_price),
+      turnover:         parseNum(r.turnover),
+      net_profit:       parseNum(r.net_profit),
+      rent:             parseNum(r.rent),
+      leasehold:        parseNum(r.leasehold),
+      ebit:             parseNum(r.ebit),
+      ebitda:           parseNum(r.ebitda),
+      freehold:         parseNum(r.freehold),
+      franchise_fee:    parseNum(r.franchise_fee),
+      investment:       parseNum(r.investment),
+      more_info:        r.more_info        || null,
+      other_financials: r.other_financials || null,
+      source:           r.source           || null,
+      listing_id:       r.listing_id       || null,
+      archived:         parseBool(r.archived),
+      last_seen_at:     parseDate(r.last_seen_at),
+      last_verified_at: parseDate(r.last_verified_at),
+      created_at:       parseDate(r['Creation Date']),
     }).select('id').single();
 
-    if (error) {
-      console.warn(`  Skipping business ${b._id} (${b.business_name_text}): ${error.message}`);
-      continue;
-    }
-    idMap.business[b._id] = data.id;
+    if (error) { console.warn(`  Skipping business "${r.business_name}": ${error.message}`); continue; }
+    idMap.business[r['unique id']] = data.id;
+    inserted++;
+    if (inserted % 500 === 0) console.log(`  Progress: ${inserted}/${records.length}`);
   }
 
-  console.log(`  ✓ ${Object.keys(idMap.business).length} businesses migrated`);
+  console.log(`  ✓ ${inserted} businesses migrated`);
 }
 
 async function migrateAgents() {
   console.log('\n── Migrating agents ──');
-  const records = await bubbleFetchAll('Agents');
+  const records = readCsv('agents');
 
-  for (const a of records) {
+  for (const r of records) {
     const { data, error } = await supabase.from('agents').insert({
-      lead_id: mapId('leads', a.lead_custom_leads) ?? null,
-      user_id: mapId('users', a.user_user) ?? null,
-      name: a.name_text ?? null,
-      email: a.email_text ?? null,
-      challenge_style: a.style_text ?? null,
-      profanity: a.profanity_boolean ?? false,
-      traits: a.traits_text ?? null,
-      type: a.type_text ?? null,
-      voice: a.voice_text ?? null,
-      personality: a.personality_options_option_personalityoptions ?? null,
-      created_at: a['Created Date'] ?? new Date().toISOString(),
+      lead_id:         mapId('leads', r.lead),
+      user_id:         mapId('users', r.user),
+      name:            r.name            || null,
+      email:           r.email           || null,
+      challenge_style: r.challenge_style || null,
+      profanity:       parseBool(r.profanity),
+      traits:          r.traits          || null,
+      type:            r.type            || null,
+      voice:           r.voice           || null,
+      personality:     r.personality_options || null,
+      created_at:      parseDate(r['Creation Date']),
     }).select('id').single();
 
-    if (error) {
-      console.warn(`  Skipping agent ${a._id}: ${error.message}`);
-      continue;
-    }
-    idMap.agents[a._id] = data.id;
+    if (error) { console.warn(`  Skipping agent ${r['unique id']}: ${error.message}`); continue; }
+    idMap.agents[r['unique id']] = data.id;
   }
 
   console.log(`  ✓ ${Object.keys(idMap.agents).length} agents migrated`);
@@ -215,47 +237,46 @@ async function migrateAgents() {
 
 async function migrateBuyerInfo() {
   console.log('\n── Migrating buyer_info ──');
-  const records = await bubbleFetchAll('Buyer_Info');
+  const records = readCsv('buyer-infos');
 
-  for (const b of records) {
+  const splitList = v => v ? v.split(',').map(s => s.trim()).filter(Boolean) : null;
+
+  for (const r of records) {
     const { data, error } = await supabase.from('buyer_info').insert({
-      lead_id: mapId('leads', b.lead_custom_leads) ?? null,
-      user_id: mapId('users', b.user_user) ?? null,
-      buyer_type: b.buyer_type_text ?? null,
-      buying_reason: b.buying_reason_text ?? null,
-      buying_experience: b.buying_experience_text ?? null,
-      decision_speed: b.decision_speed_text ?? null,
-      geography: b.geography_text ?? null,
-      turnover_range: b.turnover_range_text ?? null,
-      ebitda_range: b.ebitda_range_text ?? null,
-      ebitda_margin_min: b.ebitda_margin_min_text ?? null,
-      asset_base: b.asset_base_text ?? null,
-      valuation_range: b.valuation_range_text ?? null,
-      deal_structure_preference: b.deal_structure_preferences_text ?? null,
-      funding_source: b.funding_source_text ?? null,
-      business_age: b.business_age_text ?? null,
-      employee_headcount: b.employee_headcount_text ?? null,
-      customer_base_type: b.customer_base_type_text ?? null,
-      contractual_recurrence: b.contractual_recurrence_text ?? null,
-      ip_technology: b.ip_technology_text ?? null,
-      physical_digital: b.physical_digital_text ?? null,
-      involvement: b.involvement_text ?? null,
-      problems: b.problems_text ?? null,
-      industry_preferences: b.industry_preferences_list_option_sectors ?? null,
-      excluded_sectors: b.excluded_sectors_list_option_sectors ?? null,
-      company_overview: b.company_overview_text ?? null,
-      langcliffe_contact_email: b.langcliffe_contact_email_text ?? null,
-      initial_budget: b.initial_budget_text ?? null,
-      misc_info: b.misc_info_text ?? null,
-      is_returning: b.is_returning_boolean ?? false,
-      created_at: b['Created Date'] ?? new Date().toISOString(),
+      lead_id:                  mapId('leads', r.lead),
+      user_id:                  mapId('users', r.user),
+      buyer_type:               r.buyer_type               || null,
+      buying_reason:            r.buying_reason            || null,
+      buying_experience:        r.buying_experience        || null,
+      decision_speed:           r.decision_speed           || null,
+      geography:                r.geography                || null,
+      turnover_range:           r.turnover_range           || null,
+      ebitda_range:             r.ebitda_range             || null,
+      ebitda_margin_min:        r.ebitda_margin_min        || null,
+      asset_base:               r.asset_base               || null,
+      valuation_range:          r.valuation_range          || null,
+      deal_structure_preference: r.deal_structure_preferences || null,
+      funding_source:           r.funding_source           || null,
+      business_age:             r.business_age             || null,
+      employee_headcount:       r.employee_headcount       || null,
+      customer_base_type:       r.customer_base_type       || null,
+      contractual_recurrence:   r.contractual_recurrence   || null,
+      ip_technology:            r.ip_technology            || null,
+      physical_digital:         r.physical_digital         || null,
+      involvement:              r.involvement              || null,
+      problems:                 r.problems                 || null,
+      industry_preferences:     splitList(r.industry_preferences),
+      excluded_sectors:         splitList(r.excluded_sectors),
+      company_overview:         r.company_overview         || null,
+      langcliffe_contact_email: r.langcliffe_contact_email || null,
+      initial_budget:           r.initial_budget           || null,
+      misc_info:                r.misc_info                || null,
+      is_returning:             parseBool(r.returning),
+      created_at:               parseDate(r['Creation Date']),
     }).select('id').single();
 
-    if (error) {
-      console.warn(`  Skipping buyer_info ${b._id}: ${error.message}`);
-      continue;
-    }
-    idMap.buyer_info[b._id] = data.id;
+    if (error) { console.warn(`  Skipping buyer_info ${r['unique id']}: ${error.message}`); continue; }
+    idMap.buyer_info[r['unique id']] = data.id;
   }
 
   console.log(`  ✓ ${Object.keys(idMap.buyer_info).length} buyer_info records migrated`);
@@ -263,65 +284,66 @@ async function migrateBuyerInfo() {
 
 async function migrateMatches() {
   console.log('\n── Migrating matches ──');
-  const records = await bubbleFetchAll('matches');
+  const records = readCsv('matches');
 
   const rows = [];
   let skipped = 0;
-  for (const m of records) {
-    const userId = mapId('users', m.user_user);
-    const businessId = mapId('business', m.business_custom_business);
+  for (const r of records) {
+    const userId     = mapId('users', r.user);
+    const businessId = mapId('business', r.business);
     if (!userId || !businessId) { skipped++; continue; }
 
     rows.push({
-      user_id: userId,
-      business_id: businessId,
-      score: m.score_number ?? null,
-      match_reason: m.match_reason_text ?? null,
-      dismissed: m.dismissed_boolean ?? false,
-      dismiss_reason: m.dismiss_reason_text ?? null,
-      created_at: m['Created Date'] ?? new Date().toISOString(),
+      user_id:       userId,
+      business_id:   businessId,
+      score:         parseNum(r.score),
+      dismissed:     parseBool(r.dismissed),
+      dismiss_reason: r.dismiss_reason || null,
+      // match_reason not in CSV export — will be null for migrated records
+      created_at:    parseDate(r['Creation Date']),
     });
   }
 
-  await insertBatch('matches', rows);
-  console.log(`  ✓ ${rows.length} matches migrated (${skipped} skipped — missing user/business)`);
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error } = await supabase.from('matches').insert(rows.slice(i, i + 500));
+    if (error) throw new Error(`migrateMatches failed at chunk ${i}: ${error.message}`);
+  }
+
+  console.log(`  ✓ ${rows.length} matches migrated (${skipped} skipped — no user/business mapping)`);
 }
 
 async function migrateLangcliffeOutreach() {
   console.log('\n── Migrating langcliffe_outreach ──');
-  const records = await bubbleFetchAll('LangcliffeOutreach');
+  const records = readCsv('langcliffe');
 
-  for (const o of records) {
-    const userId = mapId('users', o.user_user);
-    if (!userId) continue;
+  for (const r of records) {
+    const userId = mapId('users', r.user);
+    if (!userId) { console.warn(`  Skipping outreach — no user mapping for "${r.user}"`); continue; }
 
     const { data, error } = await supabase.from('langcliffe_outreach').insert({
-      user_id: userId,
-      listing_id: o.listing_id_text ?? null,
-      langcliffe_contact: o.langcliffe_contact_text ?? null,
-      business_name: o.business_name_text ?? null,
-      draft_body: o.draft_body_text ?? null,
-      inbound_email: o.inbound_email_text ?? null,
-      status: o.status_text ?? null,
-      sent_at: o.sent_at_date ?? null,
-      langcliffe_reply_body: o.langcliffe_reply_body_text ?? null,
-      reply_draft: o.reply_draft_text ?? null,
-      conversation_history: o.conversation_history_text ?? null,
-      nda_file: o.nda_file_text ?? null,
-      signed_nda_file: o.signed_nda_file_text ?? null,
-      acknowledgment_draft: o.acknowledgment_draft_text ?? null,
-      nda_return_draft: o.nda_return_draft_text ?? null,
-      thread_message_id: o.thread_message_id_text ?? null,
-      im_url: o.im_url_text ?? null,
-      im_password: o.im_password_text ?? null,
-      created_at: o['Created Date'] ?? new Date().toISOString(),
+      user_id:               userId,
+      listing_id:            r.listing_id            || null,
+      langcliffe_contact:    r.langcliffe_contact    || null,
+      business_name:         r.business_name         || null,
+      draft_body:            r.draft_body            || null,
+      inbound_email:         r.inbound_email         || null,
+      status:                r.status                || null,
+      sent_at:               parseDate(r.sent_at),
+      langcliffe_reply_body: r.langcliffe_reply_body || null,
+      reply_draft:           r.reply_draft           || null,
+      conversation_history:  r.conversation_history  || null,
+      nda_file:              r.nda_file              || null,
+      signed_nda_file:       r.signed_nda_file       || null,
+      acknowledgment_draft:  r.acknowledgment_draft  || null,
+      nda_return_draft:      r.nda_return_draft      || null,
+      thread_message_id:     r.thread_message_id     || null,
+      im_url:                r.im_url                || null,
+      im_password:           r.im_password           || null,
+      created_at:            parseDate(r['Creation Date']),
     }).select('id').single();
 
-    if (error) {
-      console.warn(`  Skipping outreach ${o._id}: ${error.message}`);
-      continue;
-    }
-    idMap.langcliffe_outreach[o._id] = data.id;
+    if (error) { console.warn(`  Skipping outreach ${r['unique id']}: ${error.message}`); continue; }
+    idMap.langcliffe_outreach[r['unique id']] = data.id;
   }
 
   console.log(`  ✓ ${Object.keys(idMap.langcliffe_outreach).length} outreach records migrated`);
@@ -329,99 +351,105 @@ async function migrateLangcliffeOutreach() {
 
 async function migrateEmails() {
   console.log('\n── Migrating emails ──');
-  const records = await bubbleFetchAll('Emails');
+  const records = readCsv('emails');
 
   const rows = [];
   let skipped = 0;
-  for (const e of records) {
-    const userId = mapId('users', e.user_user);
+  for (const r of records) {
+    const userId = mapId('users', r.user);
     if (!userId) { skipped++; continue; }
-
     rows.push({
-      body: e.body_text ?? null,
-      is_agent: e.is_agent_boolean ?? false,
-      thread_id: e.thread_id_text ?? null,
-      user_id: userId,
-      created_at: e['Created Date'] ?? new Date().toISOString(),
+      body:       r.body      || null,
+      is_agent:   parseBool(r.is_agent),
+      thread_id:  r.thread_id || null,
+      user_id:    userId,
+      created_at: parseDate(r['Creation Date']),
     });
   }
 
-  await insertBatch('emails', rows);
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error } = await supabase.from('emails').insert(rows.slice(i, i + 500));
+    if (error) throw new Error(`migrateEmails failed at chunk ${i}: ${error.message}`);
+    console.log(`  Progress: ${Math.min(i + 500, rows.length)}/${rows.length}`);
+  }
+
   console.log(`  ✓ ${rows.length} emails migrated (${skipped} skipped)`);
 }
 
 async function migrateNotifications() {
   console.log('\n── Migrating user_notification ──');
-  const records = await bubbleFetchAll('UserNotification');
+  const records = readCsv('usernotifications');
 
   const rows = [];
   let skipped = 0;
-  for (const n of records) {
-    const userId = mapId('users', n.user_user);
+  for (const r of records) {
+    const userId = mapId('users', r.user);
     if (!userId) { skipped++; continue; }
-
     rows.push({
-      user_id: userId,
-      type: n.type_text ?? null,
-      title: n.title_text ?? null,
-      body: n.body_text ?? null,
-      status: n.status_text ?? 'unread',
-      langcliffe_outreach: mapId('langcliffe_outreach', n.langcliffe_outreach_text) ?? n.langcliffe_outreach_text ?? null,
-      created_at: n['Created Date'] ?? new Date().toISOString(),
+      user_id:             userId,
+      type:                r.type   || null,
+      title:               r.title  || null,
+      body:                r.body   || null,
+      status:              r.status || 'unread',
+      langcliffe_outreach: mapId('langcliffe_outreach', r.langcliffe_outreach) ?? (r.langcliffe_outreach || null),
+      created_at:          parseDate(r['Creation Date']),
     });
   }
 
-  await insertBatch('user_notification', rows);
+  if (rows.length > 0) {
+    const { error } = await supabase.from('user_notification').insert(rows);
+    if (error) throw new Error(`migrateNotifications failed: ${error.message}`);
+  }
+
   console.log(`  ✓ ${rows.length} notifications migrated (${skipped} skipped)`);
 }
 
 async function migratePursueRequests() {
   console.log('\n── Migrating pursue_request ──');
-  const records = await bubbleFetchAll('Pursue_Request');
+  const records = readCsv('pursue');
 
   const rows = [];
   let skipped = 0;
   for (const r of records) {
-    const userId = mapId('users', r.user_user);
-    const businessId = mapId('business', r.business_custom_business);
+    const userId = mapId('users', r.user);
     if (!userId) { skipped++; continue; }
-
     rows.push({
-      user_id: userId,
-      business_id: businessId,
-      business_name: r.business_name_text ?? null,
-      status: r.status_text ?? 'pending',
-      listing_url: r.listing_url_text ?? null,
-      admin_notes: r.admin_notes_text ?? null,
-      notified_status: r.notified_status_text ?? null,
-      created_at: r['Created Date'] ?? new Date().toISOString(),
+      user_id:         userId,
+      business_id:     mapId('business', r.business),
+      business_name:   r.business_name   || null,
+      status:          r.status          || 'pending',
+      listing_url:     r.listing_url     || null,
+      admin_notes:     r.admin_notes     || null,
+      notified_status: r.notified_status || null,
+      created_at:      parseDate(r['Creation Date']),
     });
   }
 
-  await insertBatch('pursue_request', rows);
+  if (rows.length > 0) {
+    const { error } = await supabase.from('pursue_request').insert(rows);
+    if (error) throw new Error(`migratePursueRequests failed: ${error.message}`);
+  }
+
   console.log(`  ✓ ${rows.length} pursue requests migrated (${skipped} skipped)`);
 }
 
 async function migrateFeatureAnnouncements() {
   console.log('\n── Migrating feature_announcement ──');
-  const records = await bubbleFetchAll('FeatureAnnouncement');
+  const records = readCsv('featureannouncements');
 
-  for (const f of records) {
+  for (const r of records) {
     const { data, error } = await supabase.from('feature_announcement').insert({
-      name: f.name_text ?? null,
-      headline: f.headline_text ?? null,
-      cta: f.cta_text ?? null,
-      active: f.active_boolean ?? false,
-      max_impressions: f.max_impressions_number ?? null,
-      completion_field: f.completion_field_text ?? null,
-      created_at: f['Created Date'] ?? new Date().toISOString(),
+      name:             r.name             || null,
+      headline:         r.headline         || null,
+      cta:              r.cta              || null,
+      active:           parseBool(r.active),
+      max_impressions:  parseNum(r.max_impressions),
+      completion_field: r.completion_field || null,
+      created_at:       parseDate(r['Creation Date']),
     }).select('id').single();
 
-    if (error) {
-      console.warn(`  Skipping feature ${f._id}: ${error.message}`);
-      continue;
-    }
-    idMap.feature_announcement[f._id] = data.id;
+    if (error) { console.warn(`  Skipping feature ${r['unique id']}: ${error.message}`); continue; }
+    idMap.feature_announcement[r['unique id']] = data.id;
   }
 
   console.log(`  ✓ ${Object.keys(idMap.feature_announcement).length} feature announcements migrated`);
@@ -429,121 +457,147 @@ async function migrateFeatureAnnouncements() {
 
 async function migrateUserFeatureImpressions() {
   console.log('\n── Migrating user_feature_impression ──');
-  const records = await bubbleFetchAll('UserFeatureImpression');
+  const records = readCsv('userfeatureimpressions');
 
   const rows = [];
   let skipped = 0;
-  for (const i of records) {
-    const userId = mapId('users', i.user_user);
-    const featureId = mapId('feature_announcement', i.feature_custom_featureannouncement);
+  for (const r of records) {
+    const userId    = mapId('users', r.user);
+    const featureId = mapId('feature_announcement', r.feature);
     if (!userId || !featureId) { skipped++; continue; }
-
     rows.push({
-      user_id: userId,
+      user_id:    userId,
       feature_id: featureId,
-      impressions: i.impressions_number ?? 0,
-      created_at: i['Created Date'] ?? new Date().toISOString(),
+      impressions: parseNum(r.impressions) ?? 0,
+      created_at: parseDate(r['Creation Date']),
     });
   }
 
-  await insertBatch('user_feature_impression', rows);
+  if (rows.length > 0) {
+    const { error } = await supabase.from('user_feature_impression').insert(rows);
+    if (error) throw new Error(`migrateUserFeatureImpressions failed: ${error.message}`);
+  }
+
   console.log(`  ✓ ${rows.length} feature impressions migrated (${skipped} skipped)`);
 }
 
 async function migrateScrapeLog() {
   console.log('\n── Migrating scrape_log ──');
-  const records = await bubbleFetchAll('Scrape_Log');
+  const records = readCsv('scrape-logs');
 
-  const rows = records.map(s => ({
-    last_run: s.last_run_date ?? s.last_run ?? null,
-    records_added: s.records_added_number ?? s.records_added ?? null,
-    records_archived: s.records_archived_number ?? s.records_archived ?? null,
-    matches_made: s.matched_made_number ?? s.matches_made ?? null,
-    created_at: s['Created Date'] ?? new Date().toISOString(),
+  const rows = records.map(r => ({
+    last_run:         parseDate(r.last_run),
+    records_added:    parseNum(r.records_added),
+    records_archived: parseNum(r.records_archived),
+    matches_made:     parseNum(r.matches_made),
+    created_at:       parseDate(r['Creation Date']),
   }));
 
-  await insertBatch('scrape_log', rows);
+  if (rows.length > 0) {
+    const { error } = await supabase.from('scrape_log').insert(rows);
+    if (error) throw new Error(`migrateScrapeLog failed: ${error.message}`);
+  }
+
   console.log(`  ✓ ${rows.length} scrape logs migrated`);
 }
 
-// ── Pinecone re-index ────────────────────────────────────────────────────────
+async function migrateSources() {
+  console.log('\n── Migrating sources ──');
+  const records = readCsv('sources');
+
+  const rows = records.map(r => ({
+    name:       r.name || null,
+    url:        r.url  || null,
+    created_at: parseDate(r['Creation Date']),
+  }));
+
+  if (rows.length > 0) {
+    const { error } = await supabase.from('sources').insert(rows);
+    if (error) throw new Error(`migrateSources failed: ${error.message}`);
+  }
+
+  console.log(`  ✓ ${rows.length} sources migrated`);
+}
+
+// ── Pinecone re-index ─────────────────────────────────────────────────────────
 
 async function reindexPinecone() {
   console.log('\n── Re-indexing Pinecone ──');
 
-  // 1. Delete all existing vectors
   console.log('  Deleting all existing vectors...');
   await pineconeIndex.deleteAll();
   console.log('  ✓ Old vectors deleted');
 
-  // 2. Fetch all non-archived businesses from Supabase
   const { data: businesses, error } = await supabase
     .from('business')
     .select('*')
     .eq('archived', false);
-
   if (error) throw new Error(`Failed to fetch businesses: ${error.message}`);
   console.log(`  ${businesses.length} non-archived businesses to embed`);
 
-  // 3. Embed and upsert in batches of 100
   let embedded = 0;
   let failed = 0;
 
   for (let i = 0; i < businesses.length; i += 100) {
     const batch = businesses.slice(i, i + 100);
 
-    const vectors = [];
-    for (const b of batch) {
+    const goldenStrings = batch.map(b => {
       const parts = [];
       if (b.business_name) parts.push(b.business_name + '.');
-      if (b.sector) parts.push(`Sector: ${b.sector}.`);
-      if (b.sub_sector) parts.push(`Sub-sector: ${b.sub_sector}.`);
-      if (b.location) parts.push(`Location: ${b.location}.`);
-      if (b.description) parts.push(b.description.trim());
-      const goldenString = parts.join(' ') || '(no description)';
+      if (b.sector)        parts.push(`Sector: ${b.sector}.`);
+      if (b.sub_sector)    parts.push(`Sub-sector: ${b.sub_sector}.`);
+      if (b.location)      parts.push(`Location: ${b.location}.`);
+      if (b.description)   parts.push(b.description.trim());
+      return parts.join(' ') || '(no description)';
+    });
 
-      try {
-        const embeddingRes = await openai.embeddings.create({
-          model: 'text-embedding-3-small',
-          input: goldenString,
-        });
+    let embeddings;
+    try {
+      const res = await openai.embeddings.create({
+        model: 'text-embedding-3-small',
+        input: goldenStrings,
+      });
+      embeddings = res.data;
+    } catch (err) {
+      console.warn(`  Batch ${i}–${i + batch.length} embedding failed — skipping: ${err.message}`);
+      failed += batch.length;
+      continue;
+    }
 
-        const metadata = {};
-        for (const field of ['asking_price', 'leasehold', 'freehold', 'turnover', 'net_profit', 'ebit', 'ebitda', 'rent', 'investment', 'franchise_fee']) {
-          if (b[field] != null && isFinite(b[field])) metadata[field] = b[field];
-        }
-        for (const field of ['business_name', 'location', 'region', 'sector', 'sub_sector', 'source', 'url']) {
-          if (b[field]) metadata[field] = b[field];
-        }
+    const vectors = [];
+    for (let j = 0; j < batch.length; j++) {
+      const b = batch[j];
+      const embedding = embeddings[j]?.embedding;
+      if (!embedding) { failed++; continue; }
 
-        vectors.push({
-          id: b.id, // Supabase UUID
-          values: embeddingRes.data[0].embedding,
-          metadata,
-        });
-        embedded++;
-      } catch (err) {
-        console.warn(`  Failed to embed ${b.id} (${b.business_name}): ${err.message}`);
-        failed++;
+      const metadata = {};
+      for (const field of ['asking_price', 'leasehold', 'freehold', 'turnover', 'net_profit', 'ebit', 'ebitda', 'rent', 'investment', 'franchise_fee']) {
+        if (b[field] != null && isFinite(b[field])) metadata[field] = b[field];
       }
+      for (const field of ['business_name', 'location', 'region', 'sector', 'sub_sector', 'source', 'url']) {
+        if (b[field]) metadata[field] = b[field];
+      }
+
+      vectors.push({ id: b.id, values: embedding, metadata });
+      embedded++;
     }
 
     if (vectors.length > 0) {
       await pineconeIndex.upsert({ records: vectors });
     }
 
-    console.log(`  Progress: ${embedded + failed}/${businesses.length} (${embedded} embedded, ${failed} failed)`);
+    console.log(`  Progress: ${i + batch.length}/${businesses.length} (${embedded} embedded, ${failed} failed)`);
   }
 
   console.log(`  ✓ Pinecone re-indexed: ${embedded} vectors, ${failed} failures`);
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
+// ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
   console.log('=== Bubble → Supabase Migration ===\n');
+  console.log(`CSV_DIR: ${CSV_DIR}`);
 
-  // Phase 1: Migrate data (order matters — FK dependencies)
   await migrateUsers();
   await migrateLeads();
   await migrateBusinesses();
@@ -557,14 +611,13 @@ async function main() {
   await migrateFeatureAnnouncements();
   await migrateUserFeatureImpressions();
   await migrateScrapeLog();
+  await migrateSources();
 
-  // Phase 2: Summary
   console.log('\n=== Migration Summary ===');
   for (const [table, map] of Object.entries(idMap)) {
-    console.log(`  ${table}: ${Object.keys(map).length} records`);
+    console.log(`  ${table}: ${Object.keys(map).length} records mapped`);
   }
 
-  // Phase 3: Re-index Pinecone with new Supabase UUIDs
   await reindexPinecone();
 
   console.log('\n=== Migration Complete ===');
