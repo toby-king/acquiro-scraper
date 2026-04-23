@@ -307,10 +307,10 @@ const server = createServer(async (req, res) => {
         schedulerEnabled,
         cronExpression,
         timezone: 'Europe/London',
-        lastRun:          lastLog?.last_run_date          ?? null,
-        lastRunAdded:     lastLog?.records_added_number   ?? null,
-        lastRunArchived:  lastLog?.records_archived_number ?? null,
-        lastRunMatches:   lastLog?.matched_made_number    ?? null,
+        lastRun:          lastLog?.last_run          ?? null,
+        lastRunAdded:     lastLog?.records_added     ?? null,
+        lastRunArchived:  lastLog?.records_archived  ?? null,
+        lastRunMatches:   lastLog?.matches_made      ?? null,
       });
     }
 
@@ -395,13 +395,13 @@ const server = createServer(async (req, res) => {
             // Fetch user details (cached per userId)
             let userName = null;
             let userEmail = null;
-            if (r.user_user) {
-              if (!userCache[r.user_user]) {
-                try { userCache[r.user_user] = await getUserDetails(r.user_user); } catch { userCache[r.user_user] = null; }
+            if (r.user_id) {
+              if (!userCache[r.user_id]) {
+                try { userCache[r.user_id] = await getUserDetails(r.user_id); } catch { userCache[r.user_id] = null; }
               }
-              const user = userCache[r.user_user];
-              userName = user?.name_text ?? null;
-              userEmail = user?.authentication?.email?.email ?? null;
+              const user = userCache[r.user_id];
+              userName = user?.name ?? null;
+              userEmail = user?.email ?? null;
             }
 
             // Fetch business details (cached per businessId)
@@ -411,31 +411,31 @@ const server = createServer(async (req, res) => {
             let businessAskingPrice = null;
             let businessTurnover = null;
             let businessNetProfit = null;
-            if (r.business_custom_business) {
-              if (!businessCache[r.business_custom_business]) {
-                try { businessCache[r.business_custom_business] = await getBusinessById(r.business_custom_business); } catch { businessCache[r.business_custom_business] = null; }
+            if (r.business_id) {
+              if (!businessCache[r.business_id]) {
+                try { businessCache[r.business_id] = await getBusinessById(r.business_id); } catch { businessCache[r.business_id] = null; }
               }
-              const biz = businessCache[r.business_custom_business];
+              const biz = businessCache[r.business_id];
               if (biz) {
-                businessDescription = biz.description_text ?? null;
-                businessSector = biz.sector1_text ?? null;
-                businessLocation = biz.location_text ?? null;
-                businessAskingPrice = biz.asking_price_number ?? null;
-                businessTurnover = biz.turnover_number ?? null;
-                businessNetProfit = biz.net_profit_number ?? null;
+                businessDescription = biz.description ?? null;
+                businessSector = biz.sector ?? null;
+                businessLocation = biz.location ?? null;
+                businessAskingPrice = biz.asking_price ?? null;
+                businessTurnover = biz.turnover ?? null;
+                businessNetProfit = biz.net_profit ?? null;
               }
             }
 
             return {
               ...r,
-              user_name_text: userName,
-              user_email_text: userEmail,
-              business_description_text: businessDescription,
-              business_sector_text: businessSector,
-              business_location_text: businessLocation,
-              business_asking_price_number: businessAskingPrice,
-              business_turnover_number: businessTurnover,
-              business_net_profit_number: businessNetProfit,
+              user_name: userName,
+              user_email: userEmail,
+              business_description: businessDescription,
+              business_sector: businessSector,
+              business_location: businessLocation,
+              business_asking_price: businessAskingPrice,
+              business_turnover: businessTurnover,
+              business_net_profit: businessNetProfit,
             };
           }));
 
@@ -449,7 +449,7 @@ const server = createServer(async (req, res) => {
       const contactedMatch = url.match(/^\/admin\/pursue-requests\/([^/]+)\/contacted$/);
       if (method === 'POST' && contactedMatch) {
         try {
-          await updatePursueRequest(contactedMatch[1], { status_text: 'contacted' });
+          await updatePursueRequest(contactedMatch[1], { status: 'contacted' });
           return send(res, 200, { ok: true });
         } catch (err) {
           return send(res, 500, { error: 'Update failed', detail: err.message });
@@ -460,7 +460,7 @@ const server = createServer(async (req, res) => {
       const respondedMatch = url.match(/^\/admin\/pursue-requests\/([^/]+)\/responded$/);
       if (method === 'POST' && respondedMatch) {
         try {
-          await updatePursueRequest(respondedMatch[1], { status_text: 'responded' });
+          await updatePursueRequest(respondedMatch[1], { status: 'responded' });
           return send(res, 200, { ok: true });
         } catch (err) {
           return send(res, 500, { error: 'Update failed', detail: err.message });
@@ -471,7 +471,7 @@ const server = createServer(async (req, res) => {
       const closedMatch = url.match(/^\/admin\/pursue-requests\/([^/]+)\/closed$/);
       if (method === 'POST' && closedMatch) {
         try {
-          await updatePursueRequest(closedMatch[1], { status_text: 'closed' });
+          await updatePursueRequest(closedMatch[1], { status: 'closed' });
           return send(res, 200, { ok: true });
         } catch (err) {
           return send(res, 500, { error: 'Update failed', detail: err.message });
@@ -483,7 +483,7 @@ const server = createServer(async (req, res) => {
       if (method === 'PATCH' && notesMatch) {
         try {
           const body = await readBody(req);
-          await updatePursueRequest(notesMatch[1], { admin_notes_text: body.notes ?? '' });
+          await updatePursueRequest(notesMatch[1], { admin_notes: body.notes ?? '' });
           return send(res, 200, { ok: true });
         } catch (err) {
           return send(res, 500, { error: 'Update failed', detail: err.message });
@@ -626,9 +626,9 @@ const server = createServer(async (req, res) => {
         return send(res, 500, { error: `getAgentByEmail failed: ${err.message}`, result });
       }
       if (!agent) return send(res, 404, { error: `No agent found for email: ${toEmail}`, result });
-      result.agent = { id: agent._id, userId: agent.user_user };
+      result.agent = { id: agent.id, userId: agent.user_id };
 
-      const userId = agent.user_user;
+      const userId = agent.user_id;
 
       let parsed;
       try {
@@ -705,17 +705,17 @@ const server = createServer(async (req, res) => {
         } catch {
           return send(res, 400, { error: 'Request body must be valid JSON' });
         }
-        if (!body.name_text || !body.headline_text) {
-          return send(res, 400, { error: 'name_text and headline_text are required' });
+        if (!body.name || !body.headline) {
+          return send(res, 400, { error: 'name and headline are required' });
         }
         try {
           const id = await createFeatureAnnouncement({
-            name_text: body.name_text,
-            headline_text: body.headline_text,
-            cta_text: body.cta_text ?? '',
-            active_boolean: body.active_boolean ?? false,
-            max_impressions_number: body.max_impressions_number ?? 3,
-            completion_field_text: body.completion_field_text ?? '',
+            name: body.name,
+            headline: body.headline,
+            cta: body.cta ?? '',
+            active: body.active ?? false,
+            max_impressions: body.max_impressions ?? 3,
+            completion_field: body.completion_field ?? '',
           });
           return send(res, 201, { ok: true, id });
         } catch (err) {
@@ -809,8 +809,8 @@ const server = createServer(async (req, res) => {
               if (outreach) {
                 await generateAndQueueNDAReturn(outreach);
                 // Mark the dashboard notification as actioned so it disappears
-                const notification = await getExistingUserNotification(outreach.user_user, outreachId);
-                if (notification) await markNotificationActioned(notification._id).catch(() => {});
+                const notification = await getExistingUserNotification(outreach.user_id, outreachId);
+                if (notification) await markNotificationActioned(notification.id).catch(() => {});
               }
             } catch (err) {
               console.error(`[webhook] Signed NDA email processing failed: ${err.message}`);
@@ -844,9 +844,9 @@ const server = createServer(async (req, res) => {
         return;
       }
 
-      const userId = agent.user_user;
+      const userId = agent.user_id;
       if (!userId) {
-        console.warn(`[webhook] Agent found but has no user_user — ignoring`);
+        console.warn(`[webhook] Agent found but has no user_id — ignoring`);
         return;
       }
 
@@ -876,7 +876,7 @@ const server = createServer(async (req, res) => {
             let configuredContactEmail = null;
             try {
               const buyerInfoRes = await getBuyerInfo(userId);
-              configuredContactEmail = buyerInfoRes?.results?.[0]?.langcliffe_contact_email_text?.toLowerCase().trim() ?? null;
+              configuredContactEmail = buyerInfoRes?.results?.[0]?.langcliffe_contact_email?.toLowerCase().trim() ?? null;
             } catch {
               // non-fatal — proceed without it
             }
@@ -912,14 +912,14 @@ const server = createServer(async (req, res) => {
           );
 
           if (attachmentEntry) {
-            console.log(`[webhook] PDF attachment detected — treating as NDA for outreach ${outreach._id}`);
+            console.log(`[webhook] PDF attachment detected — treating as NDA for outreach ${outreach.id}`);
             try {
               await handleNDAReceived({ outreach, inboundMessage: emailText, pdfBuffer: attachmentEntry.buffer, pdfFilename: attachmentEntry.filename, userId });
             } catch (err) {
               console.error(`[webhook] handleNDAReceived failed: ${err.message}`);
             }
           } else if (detectIM(emailText)) {
-            console.log(`[webhook] IM detected for outreach ${outreach._id}`);
+            console.log(`[webhook] IM detected for outreach ${outreach.id}`);
             try {
               const handled = await handleIMReceived({ outreach, inboundMessage: emailText, userId });
               if (!handled) {

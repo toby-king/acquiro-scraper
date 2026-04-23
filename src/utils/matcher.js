@@ -6,8 +6,7 @@
 import OpenAI from 'openai';
 import { Pinecone } from '@pinecone-database/pinecone';
 import { getBuyerInfo, getExistingMatches, getDismissedMatchesWithReasons } from './bubbleClient.js';
-
-const BUBBLE_BASE = 'https://toby-85612.bubbleapps.io/version-test/api/1.1';
+import { supabase } from './supabaseClient.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -62,9 +61,9 @@ function parsePercent(text) {
 }
 
 export function calcMaxPrice(profile) {
-  const budget = parseMoney(getField(profile, 'initial_budget', 'initial_budget_text'));
+  const budget = parseMoney(getField(profile, 'initial_budget'));
   if (budget == null) return Infinity;
-  const src = (getField(profile, 'funding_source', 'funding_source_text') ?? '').toLowerCase();
+  const src = (getField(profile, 'funding_source') ?? '').toLowerCase();
   let multiplier = 1;
   if (/debt|financ/.test(src))  multiplier = 3;
   else if (/seller/.test(src))  multiplier = 2;
@@ -80,23 +79,23 @@ export function buildGoldenString(p) {
     const display = Array.isArray(v) ? v.join(', ') : v;
     lines.push(`${label}: ${display}`);
   };
-  add('Buyer type',                    'buyer_type', 'buyer_type_text');
-  add('Buying experience',             'buying_experience', 'buying_experience_text');
-  add('Reason for buying',             'buying_reason', 'buying_reason_text');
-  add('Preferred sectors',             'industry_preferences_list_option_sectors', 'industry_preferences', 'industry_preferences_text');
-  add('Excluded sectors',              'excluded_sectors_list_option_sectors', 'excluded_sectors', 'excluded_sectors_text');
-  add('Preferred employee headcount',  'employee_headcount', 'employee_headcount_text');
-  add('Level of involvement preferred','involvement', 'involvement_text');
-  add('Preferred business age',        'business_age', 'business_age_text');
-  add('Asset base preference',         'asset_base', 'asset_base_text');
-  add('Revenue recurrence preference', 'contractual_recurrence', 'contractual_recurrence_text');
-  add('Customer base type',            'customer_base_type', 'customer_base_type_text');
-  add('IP and technology preference',  'ip_technology', 'ip_technology_text');
-  add('Physical vs digital',           'physical_digital', 'physical_digital_text');
-  add('Preferred geography',           'geography', 'geography_text');
-  add('Deal structure preferences',    'deal_structure_preferences', 'deal_structure_preferences_text');
-  add('Decision speed',                'decision_speed', 'decision_speed_text');
-  add('Additional notes',              'misc_info', 'misc_info_text');
+  add('Buyer type',                    'buyer_type');
+  add('Buying experience',             'buying_experience');
+  add('Reason for buying',             'buying_reason');
+  add('Preferred sectors',             'industry_preferences');
+  add('Excluded sectors',              'excluded_sectors');
+  add('Preferred employee headcount',  'employee_headcount');
+  add('Level of involvement preferred','involvement');
+  add('Preferred business age',        'business_age');
+  add('Asset base preference',         'asset_base');
+  add('Revenue recurrence preference', 'contractual_recurrence');
+  add('Customer base type',            'customer_base_type');
+  add('IP and technology preference',  'ip_technology');
+  add('Physical vs digital',           'physical_digital');
+  add('Preferred geography',           'geography');
+  add('Deal structure preferences',    'deal_structure_preference');
+  add('Decision speed',                'decision_speed');
+  add('Additional notes',              'misc_info');
   return lines.join('. ');
 }
 
@@ -280,11 +279,11 @@ export async function generateMatchesForUser(userId) {
   const p = profileRes.results[0];
 
   // 2. Parse constraints
-  const sectors = getField(p, 'industry_preferences_list_option_sectors') ?? [];
-  const excl    = getField(p, 'excluded_sectors_list_option_sectors') ?? [];
+  const sectors = getField(p, 'industry_preferences') ?? [];
+  const excl    = getField(p, 'excluded_sectors') ?? [];
 
-  const ebitdaRaw   = getField(p, 'ebitda_range', 'ebitda_range_text');
-  const turnoverRaw = getField(p, 'turnover_range', 'turnover_range_text');
+  const ebitdaRaw   = getField(p, 'ebitda_range');
+  const turnoverRaw = getField(p, 'turnover_range');
   const ebitda      = parseRange(ebitdaRaw);
   const turnover    = parseRange(turnoverRaw);
   let maxPrice      = calcMaxPrice(p);
@@ -383,23 +382,17 @@ export async function generateMatchesForUser(userId) {
   }
 
   await Promise.all(
-    matches.map((match) =>
-      fetch(`${BUBBLE_BASE}/obj/matches`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.BUBBLE_API_KEY}`,
-        },
-        body: JSON.stringify({
-          user_user: userId,
-          business_custom_business: match.id,
-          score_number: match.score,
-        }),
-      }).then((res) => {
-        if (!res.ok) throw new Error(`create_match returned HTTP ${res.status} for ${match.id}`);
-        console.log(`[generate-matches] Created match: business=${match.id} score=${match.score}`);
-      }),
-    ),
+    matches.map(async (match) => {
+      const { error } = await supabase
+        .from('matches')
+        .insert({
+          user_id: userId,
+          business_id: match.id,
+          score: match.score,
+        });
+      if (error) throw new Error(`create_match failed for ${match.id}: ${error.message}`);
+      console.log(`[generate-matches] Created match: business=${match.id} score=${match.score}`);
+    }),
   );
 
   return { matched: matches.length, matches };

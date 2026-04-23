@@ -110,7 +110,7 @@ async function main() {
   // Debug: show first record's keys so we can confirm the ID field name
   // 2. Fetch existing Pinecone metadata in batches to detect already-classified records
   console.log('[backfill] Fetching existing Pinecone metadata…');
-  const ids = businesses.map((b) => b._id).filter(Boolean);
+  const ids = businesses.map((b) => b.id).filter(Boolean);
   const pineconeMetaMap = {};
   for (let i = 0; i < ids.length; i += PINECONE_FETCH_BATCH) {
     const batchIds = ids.slice(i, i + PINECONE_FETCH_BATCH);
@@ -122,8 +122,8 @@ async function main() {
 
   // 3. Determine which records need classifying
   const toClassify = businesses.filter((b) => {
-    if (!b._id) return false;
-    const meta = pineconeMetaMap[b._id];
+    if (!b.id) return false;
+    const meta = pineconeMetaMap[b.id];
     if (!meta) return false; // not in Pinecone (ghost listing) — skip
     if (!FORCE && meta.normalised_sectors?.length > 0) return false; // already done
     return true;
@@ -142,16 +142,16 @@ async function main() {
   let failed = 0;
 
   await processBatches(toClassify, PINECONE_FETCH_BATCH, CLASSIFY_CONCURRENCY, async (business) => {
-    const { _id } = business;
-    const business_name = business.business_name_text ?? business.business_name ?? '(unknown)';
-    const sector        = business.sector1_text       ?? business.sector        ?? null;
-    const description   = business.description_text   ?? business.description   ?? null;
+    const id = business.id;
+    const business_name = business.business_name ?? '(unknown)';
+    const sector        = business.sector ?? null;
+    const description   = business.description ?? null;
 
     const normalisedSectors = await classifySectors(business_name, sector, description);
 
     done++;
     process.stdout.write(
-      `\r  Classified ${done} / ${toClassify.length}  [${_id}] → [${normalisedSectors.join(', ') || 'none'}]   `,
+      `\r  Classified ${done} / ${toClassify.length}  [${id}] → [${normalisedSectors.join(', ') || 'none'}]   `,
     );
 
     if (DRY_RUN) return;
@@ -163,19 +163,19 @@ async function main() {
     }
 
     // Fetch the existing record to get its current metadata (merge, don't overwrite)
-    const existing = pineconeMetaMap[_id] ?? {};
+    const existing = pineconeMetaMap[id] ?? {};
     const updatedMeta = { ...existing, normalised_sectors: normalisedSectors };
 
     // Upsert requires the vector — fetch it from Pinecone
-    const fetchRes = await index.fetch({ ids: [_id] });
-    const record = fetchRes.records?.[_id];
+    const fetchRes = await index.fetch({ ids: [id] });
+    const record = fetchRes.records?.[id];
     if (!record?.values?.length) {
-      console.warn(`\n[backfill] No vector found in Pinecone for ${_id} — skipping`);
+      console.warn(`\n[backfill] No vector found in Pinecone for ${id} — skipping`);
       failed++;
       return;
     }
 
-    await index.upsert({ records: [{ id: _id, values: record.values, metadata: updatedMeta }] });
+    await index.upsert({ records: [{ id, values: record.values, metadata: updatedMeta }] });
   });
 
   console.log(); // newline after progress

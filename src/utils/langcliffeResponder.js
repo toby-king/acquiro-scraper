@@ -179,10 +179,10 @@ async function generateDraftBody({ listing, buyerProfile, agentName, agentEmail 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const contactFirstName = listing.langcliffeContactName?.split(' ')[0] ?? 'there';
-  const companyOverview  = getField(buyerProfile, 'company_overview_text') ?? '';
+  const companyOverview  = getField(buyerProfile, 'company_overview') ?? '';
   const companyName      = extractCompanyName(companyOverview) ?? 'our client';
-  const fundingSource    = getField(buyerProfile, 'funding_source', 'funding_source_text') ?? '';
-  const geography        = getField(buyerProfile, 'geography', 'geography_text') ?? 'UK';
+  const fundingSource    = getField(buyerProfile, 'funding_source') ?? '';
+  const geography        = getField(buyerProfile, 'geography') ?? 'UK';
 
   const prompt = `Write a short, professional expression-of-interest email to a business broker.
 
@@ -263,10 +263,10 @@ export async function processLangcliffeListings({ userId, listingsWithBubbleIds,
   }
 
   // 2. Parse buyer constraints
-  const sectors      = getField(p, 'industry_preferences_list_option_sectors') ?? [];
-  const excl         = getField(p, 'excluded_sectors_list_option_sectors') ?? [];
-  const ebitda       = parseRange(getField(p, 'ebitda_range', 'ebitda_range_text'));
-  const turnover     = parseRange(getField(p, 'turnover_range', 'turnover_range_text'));
+  const sectors      = getField(p, 'industry_preferences') ?? [];
+  const excl         = getField(p, 'excluded_sectors') ?? [];
+  const ebitda       = parseRange(getField(p, 'ebitda_range'));
+  const turnover     = parseRange(getField(p, 'turnover_range'));
   const maxPrice     = calcMaxPrice(p);
   const sectorKeywords = expandSectorKeywords(sectors);
   const exclKeywords   = expandSectorKeywords(excl);
@@ -283,8 +283,8 @@ export async function processLangcliffeListings({ userId, listingsWithBubbleIds,
   const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
   const pineconeIndex = pinecone.index(process.env.PINECONE_INDEX_NAME);
 
-  const agentName  = agent.name_text ?? agent.name ?? 'Your Agent';
-  const agentEmail = agent.email_text ?? null;
+  const agentName  = agent.name ?? 'Your Agent';
+  const agentEmail = agent.email ?? null;
 
   for (const { bubbleId, listing } of listingsWithBubbleIds) {
     const listingId = `langcliffe_${listing.ref_id}`;
@@ -391,18 +391,18 @@ export async function sendApprovedOutreach(outreachId) {
   const outreach = await getLangcliffeOutreach(outreachId);
   if (!outreach) throw new Error(`LangcliffeOutreach record not found: ${outreachId}`);
 
-  const userId = outreach.user_user;
+  const userId = outreach.user_id;
   const agent  = await getAgentForUser(userId);
 
-  const rawName    = agent?.name_text ?? agent?.name ?? 'agent';
+  const rawName    = agent?.name ?? 'agent';
   const fromEmail  = `${sanitiseAgentName(rawName)}@acquiro-agent.com`;
   const fromName   = agentDisplayName(rawName);
 
-  const ref = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
-  const subject = `Acquisition enquiry — Ref ${ref}: ${outreach.business_name_text ?? 'Business opportunity'}`;
+  const ref = outreach.listing_id?.replace('langcliffe_', '') ?? '';
+  const subject = `Acquisition enquiry — Ref ${ref}: ${outreach.business_name ?? 'Business opportunity'}`;
 
   const testRecipient = process.env.LANGCLIFFE_TEST_RECIPIENT;
-  const recipient = testRecipient || outreach.langcliffe_contact_text;
+  const recipient = testRecipient || outreach.langcliffe_contact;
 
   const messageId = generateMessageId(fromEmail.split('@')[1] ?? 'acquiro-agent.com');
 
@@ -411,12 +411,12 @@ export async function sendApprovedOutreach(outreachId) {
     fromName,
     to:        recipient,
     subject,
-    body:      outreach.draft_body_text,
+    body:      outreach.draft_body,
     messageId,
   });
 
   await approveOutreach(outreachId, messageId);
-  console.log(`[langcliffe] Outreach sent for ${outreach.listing_id_text} → ${recipient}${testRecipient ? ' (test override)' : ''}`);
+  console.log(`[langcliffe] Outreach sent for ${outreach.listing_id} → ${recipient}${testRecipient ? ' (test override)' : ''}`);
 }
 
 // ── Reply handling ────────────────────────────────────────────────────────────
@@ -424,20 +424,20 @@ export async function sendApprovedOutreach(outreachId) {
 async function generateReplyBody({ outreach, inboundMessage, buyerProfile, agentName, agentEmail }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-  const contactFirstName = outreach.langcliffe_contact_text
+  const contactFirstName = outreach.langcliffe_contact
     ?.match(/<([^>]+)>/)?.[1]?.split('@')[0]?.replace(/[._-]/g, ' ')
-    ?? outreach.langcliffe_contact_text?.split('@')[0]?.replace(/[._-]/g, ' ')
+    ?? outreach.langcliffe_contact?.split('@')[0]?.replace(/[._-]/g, ' ')
     ?? 'there';
 
-  const companyOverview = getField(buyerProfile, 'company_overview_text') ?? '';
+  const companyOverview = getField(buyerProfile, 'company_overview') ?? '';
   const companyName     = extractCompanyName(companyOverview) ?? 'our client';
 
-  const conversationHistory = outreach.conversation_history_text ?? '';
+  const conversationHistory = outreach.conversation_history ?? '';
   const historySection = conversationHistory
     ? `Conversation history so far:\n${conversationHistory}\n\n`
-    : `Your original expression of interest:\n${outreach.draft_body_text}\n\n`;
+    : `Your original expression of interest:\n${outreach.draft_body}\n\n`;
 
-  const prompt = `You are ${agentName}, an M&A acquisition advisor writing on behalf of ${companyName}. You are in an email conversation with a business broker at Langcliffe International about the opportunity "${outreach.business_name_text}".
+  const prompt = `You are ${agentName}, an M&A acquisition advisor writing on behalf of ${companyName}. You are in an email conversation with a business broker at Langcliffe International about the opportunity "${outreach.business_name}".
 
 ${historySection}The broker (${contactFirstName}) has now replied:
 "${inboundMessage}"
@@ -467,8 +467,8 @@ function buildConversationHistory({ existing, agentName, langcliffeReply, replyD
  */
 export async function handleLangcliffeReply({ outreach, inboundMessage, userId }) {
   const agent = await getAgentForUser(userId);
-  const agentName  = agent?.name_text ?? agent?.name ?? 'Your Agent';
-  const agentEmail = agent?.email_text ?? 'agent@acquiro.ai';
+  const agentName  = agent?.name ?? 'Your Agent';
+  const agentEmail = agent?.email ?? 'agent@acquiro.ai';
 
   const profileRes   = await getBuyerInfo(userId);
   const buyerProfile = profileRes?.results?.[0] ?? {};
@@ -476,23 +476,23 @@ export async function handleLangcliffeReply({ outreach, inboundMessage, userId }
   const replyDraft = await generateReplyBody({ outreach, inboundMessage, buyerProfile, agentName, agentEmail });
 
   const conversationHistory = buildConversationHistory({
-    existing:       outreach.conversation_history_text ?? '',
+    existing:       outreach.conversation_history ?? '',
     agentName,
     langcliffeReply: inboundMessage,
     replyDraft,
   });
 
   await updateOutreachReply({
-    outreachId:          outreach._id,
+    outreachId:          outreach.id,
     langcliffeReplyBody: inboundMessage,
     replyDraft,
     conversationHistory,
   });
 
-  console.log(`[langcliffe] Reply draft queued for outreach ${outreach._id} — awaiting admin approval`);
+  console.log(`[langcliffe] Reply draft queued for outreach ${outreach.id} — awaiting admin approval`);
   notifyAdmins(
-    `[Acquiro] Langcliffe reply — ${outreach.business_name_text ?? outreach._id}`,
-    `Langcliffe has replied and a response draft is awaiting your approval.\n\nBusiness: ${outreach.business_name_text ?? 'Unknown'}\nFrom: ${outreach.langcliffe_contact_text ?? 'Unknown'}`,
+    `[Acquiro] Langcliffe reply — ${outreach.business_name ?? outreach.id}`,
+    `Langcliffe has replied and a response draft is awaiting your approval.\n\nBusiness: ${outreach.business_name ?? 'Unknown'}\nFrom: ${outreach.langcliffe_contact ?? 'Unknown'}`,
   ).catch(() => {});
 }
 
@@ -502,36 +502,36 @@ export async function handleLangcliffeReply({ outreach, inboundMessage, userId }
 export async function sendApprovedReply(outreachId) {
   const outreach = await getLangcliffeOutreach(outreachId);
   if (!outreach) throw new Error(`LangcliffeOutreach record not found: ${outreachId}`);
-  if (!outreach.reply_draft_text) throw new Error(`No reply draft on outreach: ${outreachId}`);
+  if (!outreach.reply_draft) throw new Error(`No reply draft on outreach: ${outreachId}`);
 
-  const userId = outreach.user_user;
+  const userId = outreach.user_id;
   const agent  = await getAgentForUser(userId);
 
-  const rawName   = agent?.name_text ?? agent?.name ?? 'agent';
+  const rawName   = agent?.name ?? 'agent';
   const fromEmail = `${sanitiseAgentName(rawName)}@acquiro-agent.com`;
   const fromName  = agentDisplayName(rawName);
 
-  const ref     = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
-  const subject = `RE: Acquisition enquiry — Ref ${ref}: ${outreach.business_name_text ?? 'Business opportunity'}`;
+  const ref     = outreach.listing_id?.replace('langcliffe_', '') ?? '';
+  const subject = `RE: Acquisition enquiry — Ref ${ref}: ${outreach.business_name ?? 'Business opportunity'}`;
 
   const testRecipient = process.env.LANGCLIFFE_TEST_RECIPIENT;
-  const recipient     = testRecipient || outreach.langcliffe_contact_text;
+  const recipient     = testRecipient || outreach.langcliffe_contact;
 
   await sendViaSendGrid({
     from:       fromEmail,
     fromName,
     to:         recipient,
     subject,
-    body:       outreach.reply_draft_text,
-    inReplyTo:  outreach.thread_message_id_text ?? null,
+    body:       outreach.reply_draft,
+    inReplyTo:  outreach.thread_message_id ?? null,
   });
 
   // Mark the pending block in conversation history as sent
   const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-  const updatedHistory = (outreach.conversation_history_text ?? '').replace('[Pending]', `[${date}]`);
+  const updatedHistory = (outreach.conversation_history ?? '').replace('[Pending]', `[${date}]`);
 
   await approveReply(outreachId, updatedHistory);
-  console.log(`[langcliffe] Reply sent for ${outreach.listing_id_text} → ${recipient}${testRecipient ? ' (test override)' : ''}`);
+  console.log(`[langcliffe] Reply sent for ${outreach.listing_id} → ${recipient}${testRecipient ? ' (test override)' : ''}`);
 }
 
 /**
@@ -541,29 +541,29 @@ export async function rewriteReplyDraft(outreachId, feedback) {
   const outreach = await getLangcliffeOutreach(outreachId);
   if (!outreach) throw new Error(`LangcliffeOutreach record not found: ${outreachId}`);
 
-  const userId       = outreach.user_user;
+  const userId       = outreach.user_id;
   const agent        = await getAgentForUser(userId);
-  const agentName    = agent?.name_text ?? agent?.name ?? 'Your Agent';
-  const agentEmail   = agent?.email_text ?? 'agent@acquiro.ai';
+  const agentName    = agent?.name ?? 'Your Agent';
+  const agentEmail   = agent?.email ?? 'agent@acquiro.ai';
   const profileRes   = await getBuyerInfo(userId);
   const buyerProfile = profileRes?.results?.[0] ?? {};
 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const feedbackSection = feedback ? `\n\nAdmin feedback on the previous reply:\n"${feedback}"\nPlease address this in the rewrite.` : '';
-  const contactFirstName = outreach.langcliffe_contact_text?.split('@')[0]?.replace(/[._-]/g, ' ') ?? 'there';
-  const companyOverview  = getField(buyerProfile, 'company_overview_text') ?? '';
+  const contactFirstName = outreach.langcliffe_contact?.split('@')[0]?.replace(/[._-]/g, ' ') ?? 'there';
+  const companyOverview  = getField(buyerProfile, 'company_overview') ?? '';
   const companyName      = extractCompanyName(companyOverview) ?? 'our client';
 
   const prompt = `Rewrite the following reply email. Keep it concise (under 150 words), professional, and plain text only. No subject line.${feedbackSection}
 
 Previous reply draft:
-${outreach.reply_draft_text}
+${outreach.reply_draft}
 
 Context:
 - Broker contact: ${contactFirstName}
-- Business: ${outreach.business_name_text ?? 'the business'}
-- Their message we're replying to: ${outreach.langcliffe_reply_body_text ?? '(see conversation)'}
+- Business: ${outreach.business_name ?? 'the business'}
+- Their message we're replying to: ${outreach.langcliffe_reply_body ?? '(see conversation)'}
 - Writing on behalf of: ${companyName}
 - Company overview: ${companyOverview}
 - Agent signing off: ${agentName} | ${agentEmail}`;
@@ -577,17 +577,17 @@ Context:
   const newReplyDraft = completion.choices[0].message.content.trim();
 
   // Update reply draft and rebuild the pending block in conversation history
-  const updatedHistory = (outreach.conversation_history_text ?? '')
+  const updatedHistory = (outreach.conversation_history ?? '')
     .replace(/\[Pending\].*$/s, `[Pending] ${agentName} → Langcliffe:\n${newReplyDraft}`);
 
   await updateOutreachReply({
     outreachId:          outreachId,
-    langcliffeReplyBody: outreach.langcliffe_reply_body_text ?? '',
+    langcliffeReplyBody: outreach.langcliffe_reply_body ?? '',
     replyDraft:          newReplyDraft,
     conversationHistory: updatedHistory,
   });
 
-  console.log(`[langcliffe] Reply draft rewritten for ${outreach.listing_id_text}`);
+  console.log(`[langcliffe] Reply draft rewritten for ${outreach.listing_id}`);
   return newReplyDraft;
 }
 
@@ -602,33 +602,33 @@ export async function rewriteOutreachDraft(outreachId, feedback) {
   const outreach = await getLangcliffeOutreach(outreachId);
   if (!outreach) throw new Error(`LangcliffeOutreach record not found: ${outreachId}`);
 
-  const userId = outreach.user_user;
+  const userId = outreach.user_id;
   const profileRes = await getBuyerInfo(userId);
   const p = profileRes?.results?.[0] ?? {};
 
   const agent    = await getAgentForUser(userId);
-  const agentName  = agent?.name_text ?? agent?.name ?? 'Your Agent';
-  const agentEmail = agent?.email_text ?? 'agent@acquiro.ai';
+  const agentName  = agent?.name ?? 'Your Agent';
+  const agentEmail = agent?.email ?? 'agent@acquiro.ai';
 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-  const contactFirstName = outreach.langcliffe_contact_text?.split('@')[0].replace('.', ' ') ?? 'there';
-  const companyOverview  = getField(p, 'company_overview_text') ?? '';
+  const contactFirstName = outreach.langcliffe_contact?.split('@')[0].replace('.', ' ') ?? 'there';
+  const companyOverview  = getField(p, 'company_overview') ?? '';
   const companyName      = extractCompanyName(companyOverview) ?? 'our client';
-  const fundingSource    = getField(p, 'funding_source', 'funding_source_text') ?? '';
-  const ref              = outreach.listing_id_text?.replace('langcliffe-', '') ?? '';
+  const fundingSource    = getField(p, 'funding_source') ?? '';
+  const ref              = outreach.listing_id?.replace('langcliffe-', '') ?? '';
 
   const feedbackSection = feedback ? `\n\nAdmin feedback on the previous draft:\n"${feedback}"\nPlease address this in the rewrite.` : '';
 
   const prompt = `Rewrite the following expression-of-interest email. Keep it concise (under 200 words), professional, and plain text only. Do NOT include a subject line.${feedbackSection}
 
 Previous draft:
-${outreach.draft_body_text}
+${outreach.draft_body}
 
 Context:
 - Broker contact first name: ${contactFirstName}
 - Listing reference: ${ref}
-- Business: ${outreach.business_name_text ?? 'the business'}
+- Business: ${outreach.business_name ?? 'the business'}
 - Writing on behalf of: ${companyName}
 - Company overview: ${companyOverview}
 - Funding approach: ${fundingSource}
@@ -642,7 +642,7 @@ Context:
 
   const newDraftBody = completion.choices[0].message.content.trim();
   await rejectOutreach(outreachId, newDraftBody);
-  console.log(`[langcliffe] Outreach draft rewritten for ${outreach.listing_id_text}`);
+  console.log(`[langcliffe] Outreach draft rewritten for ${outreach.listing_id}`);
   return newDraftBody;
 }
 
@@ -651,11 +651,11 @@ Context:
 async function generateAcknowledgmentBody({ outreach, agentName, agentEmail, isReplacement = false, replacementContext = '' }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-  const contactFirstName = outreach.langcliffe_contact_text
+  const contactFirstName = outreach.langcliffe_contact
     ?.match(/<([^>]+)>/)?.[1]?.split('@')[0]?.replace(/[._-]/g, ' ')
-    ?? outreach.langcliffe_contact_text?.split('@')[0]?.replace(/[._-]/g, ' ')
+    ?? outreach.langcliffe_contact?.split('@')[0]?.replace(/[._-]/g, ' ')
     ?? 'there';
-  const ref = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
+  const ref = outreach.listing_id?.replace('langcliffe_', '') ?? '';
 
   const replacementNote = isReplacement && replacementContext
     ? `\n\nContext: The broker is sending a replacement/updated NDA. Their message explaining why:\n"${replacementContext.trim().substring(0, 400)}"`
@@ -669,7 +669,7 @@ async function generateAcknowledgmentBody({ outreach, agentName, agentEmail, isR
 
 Broker first name: ${contactFirstName}
 Business opportunity reference: ${ref}
-Business name: ${outreach.business_name_text ?? 'the business'}
+Business name: ${outreach.business_name ?? 'the business'}
 Agent signing off: ${agentName} | ${agentEmail}${replacementNote}
 
 ${contentInstruction}
@@ -688,17 +688,17 @@ Under 100 words. Plain text only. No subject line.`;
 async function generateNDAReturnBody({ outreach, agentName, agentEmail }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-  const contactFirstName = outreach.langcliffe_contact_text
+  const contactFirstName = outreach.langcliffe_contact
     ?.match(/<([^>]+)>/)?.[1]?.split('@')[0]?.replace(/[._-]/g, ' ')
-    ?? outreach.langcliffe_contact_text?.split('@')[0]?.replace(/[._-]/g, ' ')
+    ?? outreach.langcliffe_contact?.split('@')[0]?.replace(/[._-]/g, ' ')
     ?? 'there';
-  const ref = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
+  const ref = outreach.listing_id?.replace('langcliffe_', '') ?? '';
 
   const prompt = `Write a short, professional email returning a signed NDA to a business broker.
 
 Broker first name: ${contactFirstName}
 Business opportunity reference: ${ref}
-Business name: ${outreach.business_name_text ?? 'the business'}
+Business name: ${outreach.business_name ?? 'the business'}
 
 Content: Confirm the signed NDA is attached. Express that you look forward to reviewing the Information Memorandum.
 
@@ -723,12 +723,12 @@ Under 80 words. Plain text only. No subject line.`;
 async function generateUserNDAEmail({ outreach, inboundMessage, agentName, agentEmail, buyerProfile, userName, agentPersonality, agentTraits, agentStyle, agentType }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-  const listingRef        = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
-  const businessName      = outreach.business_name_text ?? 'a business opportunity';
-  const originalTeaser    = outreach.inbound_email_text ?? '';
-  const conversationSoFar = outreach.conversation_history_text ?? '';
-  const brokerReply       = outreach.langcliffe_reply_body_text ?? '';
-  const companyOverview   = getField(buyerProfile, 'company_overview_text') ?? '';
+  const listingRef        = outreach.listing_id?.replace('langcliffe_', '') ?? '';
+  const businessName      = outreach.business_name ?? 'a business opportunity';
+  const originalTeaser    = outreach.inbound_email ?? '';
+  const conversationSoFar = outreach.conversation_history ?? '';
+  const brokerReply       = outreach.langcliffe_reply_body ?? '';
+  const companyOverview   = getField(buyerProfile, 'company_overview') ?? '';
 
   // Build a context block from whatever we know about the business
   const contextParts = [];
@@ -810,9 +810,9 @@ function extractIMDetails(emailText) {
 
 async function generateIMUserEmail({ outreach, agentName, agentEmail, imUrl, imPassword, buyerProfile }) {
   const openai        = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const listingRef    = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
-  const businessName  = outreach.business_name_text ?? 'a business opportunity';
-  const companyOverview = getField(buyerProfile, 'company_overview_text') ?? '';
+  const listingRef    = outreach.listing_id?.replace('langcliffe_', '') ?? '';
+  const businessName  = outreach.business_name ?? 'a business opportunity';
+  const companyOverview = getField(buyerProfile, 'company_overview') ?? '';
 
   const prompt = `You are ${agentName}, an AI acquisition advisor. Write a short, exciting update email to your client.
 
@@ -855,18 +855,18 @@ export async function handleIMReceived({ outreach, inboundMessage, userId }) {
   }
 
   const agent      = await getAgentForUser(userId);
-  const agentName  = agent?.name_text ?? agent?.name ?? 'Your Agent';
-  const agentEmail = agent?.email_text ?? 'agent@acquiro.ai';
+  const agentName  = agent?.name ?? 'Your Agent';
+  const agentEmail = agent?.email ?? 'agent@acquiro.ai';
 
   // Store IM details on the outreach record and update status
-  await storeIMDetails(outreach._id, { imUrl, imPassword });
-  console.log(`[langcliffe] IM received for outreach ${outreach._id} — url: ${imUrl}`);
+  await storeIMDetails(outreach.id, { imUrl, imPassword });
+  console.log(`[langcliffe] IM received for outreach ${outreach.id} — url: ${imUrl}`);
 
   // Auto-send user notification email
   const profileRes  = await getBuyerInfo(userId);
   const profile     = profileRes?.results?.[0] ?? {};
   const userDetails = await getUserDetails(userId);
-  const userEmail   = userDetails?.authentication?.email?.email ?? null;
+  const userEmail   = userDetails?.email ?? null;
 
   if (userEmail) {
     try {
@@ -877,9 +877,9 @@ export async function handleIMReceived({ outreach, inboundMessage, userId }) {
       const notifyRecipient = testRecipient || userEmail;
       await sendViaSendGrid({
         from:     agentEmail,
-        fromName: agentDisplayName(agent?.name_text ?? agent?.name ?? 'agent'),
+        fromName: agentDisplayName(agent?.name ?? 'agent'),
         to:       notifyRecipient,
-        subject:  `${agentName} — The IM for ${outreach.business_name_text ?? 'your opportunity'} has arrived`,
+        subject:  `${agentName} — The IM for ${outreach.business_name ?? 'your opportunity'} has arrived`,
         body:     emailBody,
       });
       console.log(`[langcliffe] IM notification email sent to ${notifyRecipient}`);
@@ -890,14 +890,14 @@ export async function handleIMReceived({ outreach, inboundMessage, userId }) {
 
   // Create dashboard notification
   try {
-    const listingRef = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
+    const listingRef = outreach.listing_id?.replace('langcliffe_', '') ?? '';
     const passwordLine = imPassword ? `\nPassword: ${imPassword}` : '';
     await createUserNotification({
       userId,
       type:       'im_received',
-      title:      `IM available — ${outreach.business_name_text ?? 'Acquisition opportunity'}`,
+      title:      `IM available — ${outreach.business_name ?? 'Acquisition opportunity'}`,
       body:       `The Information Memorandum for Ref ${listingRef} is ready to review.\n\nLink: ${imUrl}${passwordLine}`,
-      outreachId: outreach._id,
+      outreachId: outreach.id,
     });
   } catch (err) {
     console.error(`[langcliffe] Failed to create IM UserNotification: ${err.message}`);
@@ -908,14 +908,14 @@ export async function handleIMReceived({ outreach, inboundMessage, userId }) {
 
 export async function handleNDAReceived({ outreach, inboundMessage, pdfBuffer, pdfFilename, userId }) {
   const agent      = await getAgentForUser(userId);
-  const agentName  = agent?.name_text ?? agent?.name ?? 'Your Agent';
-  const agentEmail = agent?.email_text ?? 'agent@acquiro.ai';
+  const agentName  = agent?.name ?? 'Your Agent';
+  const agentEmail = agent?.email ?? 'agent@acquiro.ai';
 
   // Upload NDA PDF to Bubble
   const ndaFileUrl = await uploadFileToBubble(pdfBuffer, pdfFilename, 'application/pdf');
 
   // Detect replacement: if an NDA file is already stored on this outreach, this is a second send
-  const isReplacement = !!outreach.nda_file_text;
+  const isReplacement = !!outreach.nda_file;
 
   // Generate acknowledgment draft
   const ackDraft = await generateAcknowledgmentBody({
@@ -927,27 +927,27 @@ export async function handleNDAReceived({ outreach, inboundMessage, pdfBuffer, p
   });
 
   // Update outreach record
-  await updateOutreachNDA({ outreachId: outreach._id, ndaFileUrl, replyBody: inboundMessage, ackDraft });
-  console.log(`[langcliffe] NDA received for outreach ${outreach._id} — acknowledgment queued`);
+  await updateOutreachNDA({ outreachId: outreach.id, ndaFileUrl, replyBody: inboundMessage, ackDraft });
+  console.log(`[langcliffe] NDA received for outreach ${outreach.id} — acknowledgment queued`);
   notifyAdmins(
-    `[Acquiro] NDA received — ${outreach.business_name_text ?? outreach._id}`,
-    `An NDA has been received from Langcliffe and an acknowledgment draft is awaiting your approval.\n\nBusiness: ${outreach.business_name_text ?? 'Unknown'}\nFrom: ${outreach.langcliffe_contact_text ?? 'Unknown'}`,
+    `[Acquiro] NDA received — ${outreach.business_name ?? outreach.id}`,
+    `An NDA has been received from Langcliffe and an acknowledgment draft is awaiting your approval.\n\nBusiness: ${outreach.business_name ?? 'Unknown'}\nFrom: ${outreach.langcliffe_contact ?? 'Unknown'}`,
   ).catch(() => {});
 
   // Auto-send user notification email (no admin approval needed — going to user not broker)
   const profileRes  = await getBuyerInfo(userId);
   const profile     = profileRes?.results?.[0];
   const userDetails = await getUserDetails(userId);
-  const userEmail   = userDetails?.authentication?.email?.email ?? null;
-  const listingRef  = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
+  const userEmail   = userDetails?.email ?? null;
+  const listingRef  = outreach.listing_id?.replace('langcliffe_', '') ?? '';
 
   if (userEmail) {
     try {
-      const userName       = userDetails?.name_text ?? null;
-      const agentPersonality = agent?.personality_options_option_personalityoptions ?? null;
-      const agentTraits    = agent?.traits_text ?? null;
-      const agentStyle     = agent?.style_text ?? null;
-      const agentType      = agent?.type_text ?? null;
+      const userName       = userDetails?.name ?? null;
+      const agentPersonality = agent?.personality ?? null;
+      const agentTraits    = agent?.traits ?? null;
+      const agentStyle     = agent?.challenge_style ?? null;
+      const agentType      = agent?.type ?? null;
       const emailBody = await generateUserNDAEmail({
         outreach,
         inboundMessage,
@@ -973,7 +973,7 @@ export async function handleNDAReceived({ outreach, inboundMessage, pdfBuffer, p
         from:        agentEmail,
         fromName:    agentDisplayName(agentName.replace(' @ Acquiro', '')),
         to:          userEmail,
-        subject:     `${agentName} — An acquisition opportunity needs your attention Ref:nda_${outreach._id}`,
+        subject:     `${agentName} — An acquisition opportunity needs your attention Ref:nda_${outreach.id}`,
         body:        emailBody,
         attachments: ndaAttachment,
       });
@@ -985,25 +985,25 @@ export async function handleNDAReceived({ outreach, inboundMessage, pdfBuffer, p
 
   // Create or update UserNotification record in Bubble for dashboard banner
   try {
-    const existingNotification = await getExistingUserNotification(userId, outreach._id);
+    const existingNotification = await getExistingUserNotification(userId, outreach.id);
 
     if (existingNotification) {
       // Replacement NDA — update the existing notification rather than creating a duplicate
       const brokerNote = inboundMessage?.trim()
         ? `The broker's note: "${inboundMessage.trim().substring(0, 200)}${inboundMessage.trim().length > 200 ? '…' : ''}"`
         : 'The broker has sent a replacement file.';
-      await updateUserNotification(existingNotification._id, {
-        title: `Updated NDA — ${outreach.business_name_text ?? 'Acquisition opportunity'}`,
-        body:  `A replacement NDA has been received for ${outreach.business_name_text ?? 'a business opportunity'} (Ref ${listingRef}). The previous file has been replaced. ${brokerNote} Please download, sign, and upload the updated file from your dashboard.`,
+      await updateUserNotification(existingNotification.id, {
+        title: `Updated NDA — ${outreach.business_name ?? 'Acquisition opportunity'}`,
+        body:  `A replacement NDA has been received for ${outreach.business_name ?? 'a business opportunity'} (Ref ${listingRef}). The previous file has been replaced. ${brokerNote} Please download, sign, and upload the updated file from your dashboard.`,
       });
-      console.log(`[langcliffe] UserNotification ${existingNotification._id} updated with replacement NDA for user ${userId}`);
+      console.log(`[langcliffe] UserNotification ${existingNotification.id} updated with replacement NDA for user ${userId}`);
     } else {
       await createUserNotification({
         userId,
         type:       'nda_required',
-        title:      `NDA required — ${outreach.business_name_text ?? 'Acquisition opportunity'}`,
-        body:       `An NDA has been sent for ${outreach.business_name_text ?? 'a business opportunity'} (Ref ${listingRef}). Download, sign, and upload it from your dashboard to receive the full Information Memorandum.`,
-        outreachId: outreach._id,
+        title:      `NDA required — ${outreach.business_name ?? 'Acquisition opportunity'}`,
+        body:       `An NDA has been sent for ${outreach.business_name ?? 'a business opportunity'} (Ref ${listingRef}). Download, sign, and upload it from your dashboard to receive the full Information Memorandum.`,
+        outreachId: outreach.id,
       });
       console.log(`[langcliffe] UserNotification record created for user ${userId}`);
     }
@@ -1018,49 +1018,49 @@ export async function handleNDAReceived({ outreach, inboundMessage, pdfBuffer, p
 export async function sendApprovedAcknowledgment(outreachId) {
   const outreach = await getLangcliffeOutreach(outreachId);
   if (!outreach) throw new Error(`LangcliffeOutreach record not found: ${outreachId}`);
-  if (!outreach.acknowledgment_draft_text) throw new Error(`No acknowledgment draft on outreach: ${outreachId}`);
+  if (!outreach.acknowledgment_draft) throw new Error(`No acknowledgment draft on outreach: ${outreachId}`);
 
-  const userId = outreach.user_user;
+  const userId = outreach.user_id;
   const agent  = await getAgentForUser(userId);
 
-  const rawName   = agent?.name_text ?? agent?.name ?? 'agent';
+  const rawName   = agent?.name ?? 'agent';
   const fromEmail = `${sanitiseAgentName(rawName)}@acquiro-agent.com`;
   const fromName  = agentDisplayName(rawName);
 
-  const ref     = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
-  const subject = `RE: Acquisition enquiry — Ref ${ref}: ${outreach.business_name_text ?? 'Business opportunity'}`;
+  const ref     = outreach.listing_id?.replace('langcliffe_', '') ?? '';
+  const subject = `RE: Acquisition enquiry — Ref ${ref}: ${outreach.business_name ?? 'Business opportunity'}`;
 
   const testRecipient = process.env.LANGCLIFFE_TEST_RECIPIENT;
-  const recipient     = testRecipient || outreach.langcliffe_contact_text;
+  const recipient     = testRecipient || outreach.langcliffe_contact;
 
   await sendViaSendGrid({
     from:      fromEmail,
     fromName,
     to:        recipient,
     subject,
-    body:      outreach.acknowledgment_draft_text,
-    inReplyTo: outreach.thread_message_id_text ?? null,
+    body:      outreach.acknowledgment_draft,
+    inReplyTo: outreach.thread_message_id ?? null,
   });
   await approveAcknowledgment(outreachId);
-  console.log(`[langcliffe] Acknowledgment sent for ${outreach.listing_id_text} → ${recipient}${testRecipient ? ' (test override)' : ''}`);
+  console.log(`[langcliffe] Acknowledgment sent for ${outreach.listing_id} → ${recipient}${testRecipient ? ' (test override)' : ''}`);
 }
 
 /**
  * Generate and queue an NDA return draft after user uploads signed NDA.
  */
 export async function generateAndQueueNDAReturn(outreach) {
-  const userId = outreach.user_user;
+  const userId = outreach.user_id;
   const agent  = await getAgentForUser(userId);
 
-  const agentName  = agent?.name_text ?? agent?.name ?? 'Your Agent';
-  const agentEmail = agent?.email_text ?? 'agent@acquiro.ai';
+  const agentName  = agent?.name ?? 'Your Agent';
+  const agentEmail = agent?.email ?? 'agent@acquiro.ai';
 
   const ndaReturnDraft = await generateNDAReturnBody({ outreach, agentName, agentEmail });
-  await updateNDAReturnDraft(outreach._id, ndaReturnDraft);
-  console.log(`[langcliffe] NDA return draft generated for outreach ${outreach._id}`);
+  await updateNDAReturnDraft(outreach.id, ndaReturnDraft);
+  console.log(`[langcliffe] NDA return draft generated for outreach ${outreach.id}`);
   notifyAdmins(
-    `[Acquiro] Signed NDA ready to send — ${outreach.business_name_text ?? outreach._id}`,
-    `A user has signed the NDA and the return email is awaiting your approval.\n\nBusiness: ${outreach.business_name_text ?? 'Unknown'}\nTo: ${outreach.langcliffe_contact_text ?? 'Unknown'}`,
+    `[Acquiro] Signed NDA ready to send — ${outreach.business_name ?? outreach.id}`,
+    `A user has signed the NDA and the return email is awaiting your approval.\n\nBusiness: ${outreach.business_name ?? 'Unknown'}\nTo: ${outreach.langcliffe_contact ?? 'Unknown'}`,
   ).catch(() => {});
 }
 
@@ -1070,24 +1070,24 @@ export async function generateAndQueueNDAReturn(outreach) {
 export async function sendApprovedNDAReturn(outreachId) {
   const outreach = await getLangcliffeOutreach(outreachId);
   if (!outreach) throw new Error(`LangcliffeOutreach record not found: ${outreachId}`);
-  if (!outreach.nda_return_draft_text) throw new Error(`No NDA return draft on outreach: ${outreachId}`);
-  if (!outreach.signed_nda_file_text) throw new Error(`No signed NDA file on outreach: ${outreachId}`);
+  if (!outreach.nda_return_draft) throw new Error(`No NDA return draft on outreach: ${outreachId}`);
+  if (!outreach.signed_nda_file) throw new Error(`No signed NDA file on outreach: ${outreachId}`);
 
-  const userId = outreach.user_user;
+  const userId = outreach.user_id;
   const agent  = await getAgentForUser(userId);
 
-  const rawName   = agent?.name_text ?? agent?.name ?? 'agent';
+  const rawName   = agent?.name ?? 'agent';
   const fromEmail = `${sanitiseAgentName(rawName)}@acquiro-agent.com`;
   const fromName  = agentDisplayName(rawName);
 
-  const ref     = outreach.listing_id_text?.replace('langcliffe_', '') ?? '';
-  const subject = `RE: Acquisition enquiry — Ref ${ref}: ${outreach.business_name_text ?? 'Business opportunity'}`;
+  const ref     = outreach.listing_id?.replace('langcliffe_', '') ?? '';
+  const subject = `RE: Acquisition enquiry — Ref ${ref}: ${outreach.business_name ?? 'Business opportunity'}`;
 
   const testRecipient = process.env.LANGCLIFFE_TEST_RECIPIENT;
-  const recipient     = testRecipient || outreach.langcliffe_contact_text;
+  const recipient     = testRecipient || outreach.langcliffe_contact;
 
-  // Download signed NDA from Bubble and base64-encode it
-  const fileRes = await fetch(outreach.signed_nda_file_text);
+  // Download signed NDA and base64-encode it
+  const fileRes = await fetch(outreach.signed_nda_file);
   if (!fileRes.ok) throw new Error(`Failed to download signed NDA: ${fileRes.status}`);
   const fileBuffer = Buffer.from(await fileRes.arrayBuffer());
   const base64File = fileBuffer.toString('base64');
@@ -1100,7 +1100,7 @@ export async function sendApprovedNDAReturn(outreachId) {
     personalizations: [{ to: [{ email: recipient }] }],
     from:    { email: fromEmail, name: fromName },
     subject,
-    content: [{ type: 'text/plain', value: outreach.nda_return_draft_text }],
+    content: [{ type: 'text/plain', value: outreach.nda_return_draft }],
     attachments: [{
       content:     base64File,
       filename:    'signed-nda.pdf',
@@ -1108,10 +1108,10 @@ export async function sendApprovedNDAReturn(outreachId) {
       disposition: 'attachment',
     }],
   };
-  if (outreach.thread_message_id_text) {
+  if (outreach.thread_message_id) {
     ndaReturnPayload.headers = {
-      'In-Reply-To': outreach.thread_message_id_text,
-      'References':  outreach.thread_message_id_text,
+      'In-Reply-To': outreach.thread_message_id,
+      'References':  outreach.thread_message_id,
     };
   }
 
@@ -1127,5 +1127,5 @@ export async function sendApprovedNDAReturn(outreachId) {
   }
 
   await approveNDAReturn(outreachId);
-  console.log(`[langcliffe] NDA return sent for ${outreach.listing_id_text} → ${recipient}${testRecipient ? ' (test override)' : ''}`);
+  console.log(`[langcliffe] NDA return sent for ${outreach.listing_id} → ${recipient}${testRecipient ? ' (test override)' : ''}`);
 }

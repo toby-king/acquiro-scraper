@@ -71,8 +71,8 @@ export async function processAndIndexListing(scrapedData) {
 
   // 1. Write to Bubble (hard — must succeed)
   const bubbleResponse = await insertListing(scrapedData);
-  const bubbleId = bubbleResponse?.response?._id;
-  if (!bubbleId) throw new Error('Bubble returned no _id');
+  const bubbleId = bubbleResponse?.id;
+  if (!bubbleId) throw new Error('insertListing returned no id');
 
   // 2. Build text to embed
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
