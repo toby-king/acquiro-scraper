@@ -424,7 +424,7 @@ export async function handleUserReply({ threadId, fromEmail, emailText, toAgentE
     log(`No email record found for threadId=${threadId} — ignoring`);
     return;
   }
-  const { userId } = emailRecord;
+  const userId = emailRecord.user_id;
 
   // 2. Save inbound email to Bubble
   await saveInboundEmailRecord({ body: emailText, threadId, userId });
