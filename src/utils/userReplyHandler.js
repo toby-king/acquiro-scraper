@@ -18,6 +18,7 @@ import {
   saveInboundEmailRecord,
   getEmailThreadForUser,
   getAgentForUser,
+  getAgentByEmail,
   getBuyerInfo,
   createEmailRecord,
   updateBuyerCriteria,
@@ -424,7 +425,21 @@ export async function handleUserReply({ threadId, fromEmail, emailText, toAgentE
     log(`No email record found for threadId=${threadId} — ignoring`);
     return;
   }
-  const userId = emailRecord.user_id;
+
+  // email record may have user_id = null for records created before migration completed.
+  // Fall back to agent email lookup so these threads still work.
+  let userId = emailRecord.user_id;
+  if (!userId && toAgentEmail) {
+    const agent = await getAgentByEmail(toAgentEmail);
+    if (agent?.user_id) {
+      userId = agent.user_id;
+      log(`Recovered userId=${userId} from agent email ${toAgentEmail}`);
+    }
+  }
+  if (!userId) {
+    log(`Could not resolve userId for threadId=${threadId} — ignoring`);
+    return;
+  }
 
   // 2. Save inbound email to Bubble
   await saveInboundEmailRecord({ body: emailText, threadId, userId });
